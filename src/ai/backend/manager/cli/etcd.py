@@ -106,6 +106,17 @@ update_images.add('--docker-registry', env_var='BACKEND_DOCKER_REGISTRY',
 
 
 @etcd.register_command
+def list_images(args):
+    '''List registered kernels.'''
+    with etcd_ctx(args) as (loop, etcd):
+        val = loop.run_until_complete(etcd.get_prefix('images'))
+        for x in val:
+            tags = x[0].split('/')
+            if len(tags) == 4 and tags[2] == 'tags':
+                print(tags[1] + ':' + tags[3])
+
+
+@etcd.register_command
 def update_aliases(args):
     '''Update the image aliase list.'''
     with config_ctx(args) as (loop, config_server):
