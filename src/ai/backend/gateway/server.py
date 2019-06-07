@@ -39,6 +39,7 @@ from .exceptions import (BackendError, MethodNotAllowed, GenericNotFound,
                          GenericBadRequest, InternalServerError)
 from .config import load_config
 from .events import event_router
+from .plugin import load_webapp_plugins, load_hook_plugins
 from . import ManagerStatus
 
 VALID_VERSIONS = frozenset([
@@ -336,15 +337,13 @@ async def server_main(loop, pidx, _args):
     aiojobs.aiohttp.setup(app, **scheduler_opts)
     await gw_init(app, cors_options)
 
-    def init_subapp(create_subapp):
-        subapp, global_middlewares = create_subapp(cors_options)
+    def init_subapp(prefix, subapp, global_middlewares):
         assert isinstance(subapp, web.Application)
         subapp.on_response_prepare.append(on_prepare)
         # Allow subapp's access to the root app properties.
         # These are the public APIs exposed to extensions as well.
         for key in PUBLIC_INTERFACES:
             subapp[key] = app[key]
-        prefix = subapp.get('prefix', pkgname.split('.')[-1].replace('_', '-'))
         aiojobs.aiohttp.setup(subapp, **scheduler_opts)
         app.add_subapp('/' + prefix, subapp)
         app.middlewares.extend(global_middlewares)
@@ -360,11 +359,31 @@ async def server_main(loop, pidx, _args):
                 handler = _get_legacy_handler(r.handler, subapp, version)
                 app.router.add_route(r.method, legacy_path, handler)
 
+    webapp_plugin_ctx = load_webapp_plugins(cors_options)
+    hook_plugin_ctx = load_hook_plugins()
+    await webapp_plugin_ctx.init()
+    await hook_plugin_ctx.init()
+
+    used_prefixes = set()
     for pkgname in subapp_pkgs:
         if pidx == 0:
             log.info('Loading module: {0}', pkgname[1:])
         subapp_mod = importlib.import_module(pkgname, 'ai.backend.gateway')
-        init_subapp(getattr(subapp_mod, 'create_app'))
+        create_subapp = getattr(subapp_mod, 'create_app')
+        subapp, global_middleware = create_subapp(cors_options)
+        prefix = subapp.get('prefix', pkgname.split('.')[-1].replace('_', '-'))
+        if prefix in used_prefixes:
+            raise RuntimeError(f'A prefix for webapps overlaps with existing one: {prefix}')
+        used_prefixes.add(prefix)
+        init_subapp(prefix, subapp, global_middleware)
+
+    for prefix, subapp, global_middleware in webapp_plugin_ctx.enumerate_apps():
+        if prefix in used_prefixes:
+            raise RuntimeError(f'A prefix for webapps overlaps with existing one: {prefix}')
+        if pidx == 0:
+            log.info('Mounting webapp plugin to {0}', prefix)
+        used_prefixes.add(prefix)
+        init_subapp(prefix, subapp, global_middleware)
 
     plugins = [
         'webapp',
@@ -397,6 +416,8 @@ async def server_main(loop, pidx, _args):
         yield
     finally:
         log.info('shutting down...')
+        await webapp_plugin_ctx.shutdown()
+        await hook_plugin_ctx.shutdown()
         await runner.cleanup()
 
 

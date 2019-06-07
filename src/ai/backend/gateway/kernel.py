@@ -165,7 +165,7 @@ async def create(request: web.Request, params: Any) -> web.Response:
             resp['kernelId'] = str(kernel['sess_id'])
             resp['servicePorts'] = kernel['service_ports']
             resp['created'] = bool(created)
-        except Exception:
+        except (asyncio.CancelledError, Exception):
             # Restore concurrency_used if exception occurs before kernel creation
             if kernel is None:
                 async with request.app['dbpool'].acquire() as conn, conn.begin():
