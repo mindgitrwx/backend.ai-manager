@@ -350,6 +350,8 @@ async def server_main(loop, pidx, _args):
 
         # Add legacy version-prefixed routes to the root app with some hacks
         # (NOTE: they do not support CORS!)
+        if 'api_versions' not in subapp:
+            return
         for r in subapp.router.routes():
             for version in subapp['api_versions']:
                 subpath = r.resource.canonical
@@ -359,42 +361,34 @@ async def server_main(loop, pidx, _args):
                 handler = _get_legacy_handler(r.handler, subapp, version)
                 app.router.add_route(r.method, legacy_path, handler)
 
+    # Load plugins from package entry points.
     webapp_plugin_ctx = load_webapp_plugins(cors_options)
     hook_plugin_ctx = load_hook_plugins()
     await webapp_plugin_ctx.init()
     await hook_plugin_ctx.init()
 
+    # Load intrinsic modules.
     used_prefixes = set()
     for pkgname in subapp_pkgs:
         if pidx == 0:
             log.info('Loading module: {0}', pkgname[1:])
         subapp_mod = importlib.import_module(pkgname, 'ai.backend.gateway')
         create_subapp = getattr(subapp_mod, 'create_app')
-        subapp, global_middleware = create_subapp(cors_options)
+        subapp, global_middlewares = create_subapp(cors_options)
         prefix = subapp.get('prefix', pkgname.split('.')[-1].replace('_', '-'))
         if prefix in used_prefixes:
             raise RuntimeError(f'A prefix for webapps overlaps with existing one: {prefix}')
         used_prefixes.add(prefix)
-        init_subapp(prefix, subapp, global_middleware)
+        init_subapp(prefix, subapp, global_middlewares)
 
-    for prefix, subapp, global_middleware in webapp_plugin_ctx.enumerate_apps():
-        if prefix in used_prefixes:
+    # Attach webapp plugins to the main application.
+    for subapp, global_middlewares in webapp_plugin_ctx.enumerate_apps():
+        if subapp['prefix'] in used_prefixes:
             raise RuntimeError(f'A prefix for webapps overlaps with existing one: {prefix}')
         if pidx == 0:
             log.info('Mounting webapp plugin to {0}', prefix)
-        used_prefixes.add(prefix)
-        init_subapp(prefix, subapp, global_middleware)
-
-    plugins = [
-        'webapp',
-    ]
-    for plugin_info in discover_entrypoints(
-            plugins, disable_plugins=app['config'].disable_plugins):
-        plugin_group, plugin_name, entrypoint = plugin_info
-        if pidx == 0:
-            log.info('Loading app plugin: {0}', entrypoint.module_name)
-        plugin = entrypoint.load()
-        init_subapp(getattr(plugin, 'create_app'))
+        used_prefixes.add(subapp['prefix'])
+        init_subapp(subapp['prefix'], subapp, global_middlewares)
 
     app.on_shutdown.append(gw_shutdown)
     app.on_cleanup.append(gw_cleanup)
