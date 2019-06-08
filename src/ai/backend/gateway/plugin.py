@@ -56,9 +56,11 @@ class WebAppPluginContext:
     async def init(self):
         if self._initialized:
             raise RuntimeError('already initialized')
+        # TODO: Populate config from etcd
+        config = {}
         for plugin_mod in self._plugins:
             try:
-                subapp, global_middlewares = await plugin_mod.init(self.cors_options)
+                subapp, global_middlewares = await plugin_mod.init(config, self.cors_options)
             except ValueError:
                 raise RuntimeError('Webapp plugin protocol error: plugin.init() must return '
                                    '3-tuple of prefix, subapp, and global_middlewares')
@@ -101,6 +103,10 @@ class HookPluginContext:
     async def init(self):
         if self._initialized:
             raise RuntimeError('already initialized')
+        # TODO: Populate config from etcd
+        config = {}
+        for plugin_mod in self._plugins:
+            await plugin_mod.init(config)
         self._initialized = True
 
     async def shutdown(self):
