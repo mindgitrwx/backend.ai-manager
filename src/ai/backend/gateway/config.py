@@ -5,7 +5,7 @@ from ai.backend.common.argparse import HostPortPair, host_port_pair, port_no
 import configargparse
 
 
-def load_config(argv=None, extra_args_funcs=()):
+def load_daemon_config(argv=None, extra_args_funcs=()):
     parser = configargparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add('--namespace', env_var='BACKEND_NAMESPACE',

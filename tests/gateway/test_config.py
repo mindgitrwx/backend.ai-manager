@@ -1,7 +1,7 @@
 from ipaddress import ip_address
 
 from ai.backend.common.argparse import host_port_pair, port_no
-from ai.backend.gateway.config import load_config
+from ai.backend.gateway.config import load_daemon_config
 from ai.backend.gateway.server import gw_args
 
 
@@ -31,7 +31,7 @@ def test_args_parse_by_load_config():
         '--events-port', str(events_port),
     ]
 
-    args = load_config(argv, extra_args_funcs=(gw_args,))
+    args = load_daemon_config(argv, extra_args_funcs=(gw_args,))
 
     assert args.agent_port == agent_port
     assert args.redis_addr == host_port_pair(redis_addr)

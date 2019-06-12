@@ -27,7 +27,7 @@ import psycopg2 as pg
 import pytest
 
 from ai.backend.common.argparse import host_port_pair
-from ai.backend.gateway.config import load_config
+from ai.backend.gateway.config import load_daemon_config
 from ai.backend.gateway.events import event_router
 from ai.backend.gateway.server import (
     gw_init, gw_shutdown, gw_args,
@@ -230,7 +230,7 @@ async def app(event_loop, test_ns, test_db, unused_tcp_port):
         exception_middleware,
         api_middleware,
     ])
-    app['config'] = load_config(argv=[], extra_args_funcs=(gw_args,))
+    app['config'] = load_daemon_config(argv=[], extra_args_funcs=(gw_args,))
     app['config'].debug = True
 
     app['config'].etcd_addr = host_port_pair(os.environ['BACKEND_ETCD_ADDR'])

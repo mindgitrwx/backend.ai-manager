@@ -28,8 +28,7 @@ from ai.backend.common.argparse import (
 from ai.backend.common.utils import env_info
 from ai.backend.common.monitor import DummyStatsMonitor, DummyErrorMonitor
 from ai.backend.common.logging import Logger, BraceStyleAdapter
-from ai.backend.common.plugin import (
-    discover_entrypoints, install_plugins, add_plugin_args)
+from ai.backend.common.plugin import install_plugins, add_plugin_args
 from ..manager import __version__
 from ..manager.registry import AgentRegistry
 from .defs import REDIS_STAT_DB, REDIS_LIVE_DB, REDIS_IMAGE_DB
@@ -37,7 +36,7 @@ from .etcd import ConfigServer
 from .events import EventDispatcher, event_subscriber
 from .exceptions import (BackendError, MethodNotAllowed, GenericNotFound,
                          GenericBadRequest, InternalServerError)
-from .config import load_config
+from .config import load_daemon_config
 from .events import event_router
 from .plugin import load_webapp_plugins, load_hook_plugins
 from . import ManagerStatus
@@ -463,7 +462,7 @@ def gw_args(parser):
 
 def main():
 
-    config = load_config(extra_args_funcs=(gw_args, Logger.update_log_args))
+    config = load_daemon_config(extra_args_funcs=(gw_args, Logger.update_log_args))
     setproctitle(f'backend.ai: manager {config.namespace} '
                  f'{config.service_ip}:{config.service_port}')
     logger = Logger(config)

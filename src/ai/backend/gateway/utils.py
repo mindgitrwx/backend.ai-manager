@@ -1,3 +1,4 @@
+import asyncio
 from collections import defaultdict
 from datetime import datetime
 import functools
@@ -25,6 +26,12 @@ from .exceptions import InvalidAPIParameters, GenericForbidden, QueryNotImplemen
 log = BraceStyleAdapter(logging.getLogger('ai.backend.gateway.utils'))
 
 _rx_sitepkg_path = re.compile(r'^.+/site-packages/')
+
+
+if hasattr(asyncio, 'get_running_loop'):
+    current_loop = asyncio.get_running_loop
+else:
+    current_loop = asyncio.get_event_loop
 
 
 def method_placeholder(orig_method):

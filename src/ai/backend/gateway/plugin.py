@@ -1,4 +1,3 @@
-from abc import ABCMeta, abstractmethod
 import logging
 import pkg_resources
 from types import ModuleType
@@ -8,6 +7,7 @@ from aiohttp import web
 import aiohttp_cors
 
 from ai.backend.common.logging import BraceStyleAdapter
+from ..manager.plugin.abc import AbstractHook
 
 log = BraceStyleAdapter(logging.getLogger('ai.backend.gateway.plugin'))
 
@@ -30,13 +30,6 @@ def load_hook_plugins():
         log.info('Loading hook plugin from {}', entrypoint)
         hook_plugin_ctx.add_plugin(entrypoint.load())
     return hook_plugin_ctx
-
-
-class AbstractHookPlugin(metaclass=ABCMeta):
-
-    @abstractmethod
-    def handle_event(self, event_type, event_args):
-        raise NotImplementedError
 
 
 class WebAppPluginContext:
@@ -91,10 +84,12 @@ class WebAppPluginContext:
 class HookPluginContext:
 
     _plugins: List[ModuleType]
+    _hooks: List[AbstractHook]
     _initialized: bool
 
     def __init__(self):
         self._plugins = []
+        self._hooks = []
         self._initialized = False
 
     def add_plugin(self, plugin_mod: ModuleType):
@@ -106,11 +101,16 @@ class HookPluginContext:
         # TODO: Populate config from etcd
         config = {}
         for plugin_mod in self._plugins:
-            await plugin_mod.init(config)
+            hook = await plugin_mod.init(config)
+            await hook.init()
+            self._hooks.append(hook)
         self._initialized = True
 
     async def shutdown(self):
-        pass
+        if not self._initialized:
+            return
+        for hook in self._hooks:
+            await hook.shutdown()
 
     def dispatch_event(self, event_type, event_args):
         raise NotImplementedError
