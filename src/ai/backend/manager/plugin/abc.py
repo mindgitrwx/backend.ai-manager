@@ -1,28 +1,29 @@
 from abc import ABCMeta, abstractmethod
-from typing import Any
+from typing import Any, Awaitable, Callable, Iterable, Tuple
 
-from .types import HookEventTypes
+from .types import HookEventTypes, HookResult
 
 
 class AbstractHook(metaclass=ABCMeta):
 
     @abstractmethod
-    async def init(self):
+    def get_handlers(self) -> Iterable[Tuple[HookEventTypes,
+                                             Callable[[Any], Awaitable[HookResult]]]]:
+        '''
+        Return the list of events to hook.
+        '''
+        return []
+
+    @abstractmethod
+    async def init(self) -> None:
         '''
         Called after the agent is initialized.
         '''
         pass
 
     @abstractmethod
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         '''
         Called when the agent is going to be terminated.
         '''
         pass
-
-    @abstractmethod
-    async def handle_event(self, event_type: HookEventTypes, event_args: Any):
-        '''
-        The main method to implement.
-        '''
-        raise NotImplementedError

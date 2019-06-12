@@ -8,3 +8,9 @@ class HookEventTypes(enum.Enum):
     KERNEL_TERMINATE = 0x2002
     VFOLDER_CREATE = 0x3001
     VFOLDER_DELETE = 0x3002
+
+
+class HookResult(enum.Enum):
+    BYPASS = 0
+    REJECTED = 1
+    MODIFIED = 2

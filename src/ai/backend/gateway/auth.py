@@ -24,6 +24,7 @@ from ..manager.models import (
 )
 from ..manager.models.user import check_credential
 from ..manager.models.keypair import generate_keypair
+from ..manager.plugin.types import HookEventTypes, HookResult
 from .utils import TZINFOS, check_api_params, set_handler_attr, get_handler_attr
 
 log = BraceStyleAdapter(logging.getLogger('ai.backend.gateway.auth'))
@@ -242,6 +243,11 @@ async def authorize(request: web.Request) -> web.Response:
         params['domain'], params['username'], params['password'])
     if user is None:
         raise AuthorizationFailed('User credential mismatch.')
+
+    hook_result = await request['hook_ctx'].dispatch_event(HookEventTypes.USER_LOGIN, user)
+    if hook_result == HookResult.REJECTED:
+        raise AuthorizationFailed('User login rejected.')
+
     async with dbpool.acquire() as conn:
         query = (sa.select([keypairs.c.access_key, keypairs.c.secret_key])
                    .select_from(users)
