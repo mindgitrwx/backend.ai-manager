@@ -144,7 +144,6 @@ class ConfigServer:
                 'user': etcd_user,
                 'password': etcd_password,
             }
-        self.etcd = AsyncEtcd(etcd_addr, namespace, credentials=credentials)
         scope_prefix_map = {
             ConfigScopes.GLOBAL: '',
         }
