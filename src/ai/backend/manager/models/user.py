@@ -151,12 +151,12 @@ class User(graphene.ObjectType):
             for k in emails:
                 objs_per_key[k] = None
             async for row in conn.execute(query):
-                # if row.email in objs_per_key:
-                if objs_per_key[row.email] is not None:
-                    objs_per_key[row.email].groups.append({'id': str(row.id), 'name': row.name})
+                key = str(row.uuid) if pk_type == 'uuid' else row.email
+                if objs_per_key[key] is not None:
+                    objs_per_key[key].groups.append({'id': str(row.id), 'name': row.name})
                     continue
                 o = User.from_row(row)
-                objs_per_key[row.email] = o
+                objs_per_key[key] = o
         return tuple(objs_per_key.values())
 
 
@@ -164,8 +164,8 @@ class UserInput(graphene.InputObjectType):
     username = graphene.String(required=True)
     password = graphene.String(required=True)
     need_password_change = graphene.Boolean(required=True)
-    full_name = graphene.String(required=False)
-    description = graphene.String(required=False)
+    full_name = graphene.String(required=False, default='')
+    description = graphene.String(required=False, default='')
     is_active = graphene.Boolean(required=False, default=True)
     domain_name = graphene.String(required=True, default='default')
     role = graphene.String(required=False, default=UserRole.USER)
@@ -300,7 +300,7 @@ class ModifyUser(UserMutationMixin, graphene.Mutation):
             set_if_set('full_name')
             set_if_set('description')
             set_if_set('is_active')
-            set_if_set('domain_name')
+            # set_if_set('domain_name')  # prevent changing domain_name
             set_if_set('role')
 
             if not data and not props.group_ids:
@@ -313,24 +313,24 @@ class ModifyUser(UserMutationMixin, graphene.Mutation):
                     checkq = users.select().where(users.c.email == email)
                     result = await conn.execute(checkq)
                     o = User.from_row(await result.first())
-                    return cls(ok=True, msg='success', user=o)
+                    if not props.group_ids:
+                        return cls(ok=True, msg='success', user=o)
                 else:
                     return cls(ok=False, msg='no such user', user=None)
 
                 # Update user's group if group_ids parameter is provided.
                 from .group import association_groups_users
-                if props.group_ids:
-                    # TODO: isn't it dangerous if second execution breaks,
-                    #       which results in user lost all of groups?
-                    # Clear previous groups associated with the user.
-                    query = (association_groups_users
-                             .delete()
-                             .where(association_groups_users.c.user_id == o.uuid))
-                    await conn.execute(query)
-                    # Add user to new groups.
-                    values = [{'user_id': o.uuid, 'group_id': gid} for gid in props.group_ids]
-                    query = sa.insert(association_groups_users).values(values)
-                    await conn.execute(query)
+                # TODO: isn't it dangerous if second execution breaks,
+                #       which results in user lost all of groups?
+                # Clear previous groups associated with the user.
+                query = (association_groups_users
+                         .delete()
+                         .where(association_groups_users.c.user_id == o.uuid))
+                await conn.execute(query)
+                # Add user to new groups.
+                values = [{'user_id': o.uuid, 'group_id': gid} for gid in props.group_ids]
+                query = sa.insert(association_groups_users).values(values)
+                await conn.execute(query)
             except (pg.IntegrityError, sa.exc.IntegrityError) as e:
                 return cls(ok=False, msg=f'integrity error: {e}', user=None)
             except (asyncio.CancelledError, asyncio.TimeoutError):
