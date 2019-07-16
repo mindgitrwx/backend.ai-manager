@@ -1042,7 +1042,6 @@ class AgentRegistry:
                 })
                 result = await conn.execute(query)
                 assert result.rowcount == 1
-                # TODO: aggregate from all agents, instead of replacing everytime
                 await self.config_server.update_resource_slots(slot_key_and_units)
             elif row.status == AgentStatus.ALIVE:
                 updates = {}
@@ -1069,7 +1068,6 @@ class AgentRegistry:
                            })
                            .where(agents.c.id == agent_id))
                 await conn.execute(query)
-                # TODO: aggregate from all agents, instead of replacing everytime
                 await self.config_server.update_resource_slots(slot_key_and_units)
             else:
                 log.error('should not reach here! {0}', type(row.status))

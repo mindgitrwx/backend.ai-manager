@@ -489,19 +489,20 @@ class ConfigServer:
             await self.etcd.put_dict(updates)
         log.info('done')
 
-    async def update_resource_slots(self, slot_key_and_units, *,
-                                    clear_existing: bool = True):
+    async def update_resource_slots(self, slot_types):
         updates = {}
-        if clear_existing:
-            await self.etcd.delete_prefix('config/resource_slots/')
-        for k, v in slot_key_and_units.items():
+        cur_slot_types = await self.etcd.get_prefix('config/resource_slots')
+        for k, v in slot_types.items():
             if k in ('cpu', 'mem'):
                 continue
             # currently we support only two units
             # (where count may be fractional)
             assert v in ('bytes', 'count')
-            updates[f'config/resource_slots/{k}'] = v
-        await self.etcd.put_dict(updates)
+            if k not in cur_slot_types:
+                updates[f'config/resource_slots/{k}'] = v
+        # Only issue put call when there are updates.
+        if updates:
+            await self.etcd.put_dict(updates)
 
     async def update_manager_status(self, status):
         await self.etcd.put('manager/status', status.value)
@@ -515,7 +516,7 @@ class ConfigServer:
         Returns the system-wide known resource slots and their units.
         '''
         intrinsic_slots = {'cpu': 'count', 'mem': 'bytes'}
-        configured_slots = await self.etcd.get_prefix_dict('config/resource_slots')
+        configured_slots = await self.etcd.get_prefix('config/resource_slots')
         return {**intrinsic_slots, **configured_slots}
 
     @aiotools.lru_cache(maxsize=1, expire_after=2.0)
@@ -541,7 +542,7 @@ class ConfigServer:
         Returns the minimum and maximum ResourceSlot values.
         All slot values are converted and normalized to Decimal.
         '''
-        data = await self.etcd.get_prefix_dict(image_ref.tag_path)
+        data = await self.etcd.get_prefix(image_ref.tag_path)
         slot_units = await self.get_resource_slots()
         min_slot = ResourceSlot()
         max_slot = ResourceSlot()
@@ -596,7 +597,7 @@ async def get_resource_slots(request) -> web.Response:
 async def get_config(request: web.Request, params: Any) -> web.Response:
     etcd = request.app['config_server'].etcd
     if params['prefix']:
-        value = await etcd.get_prefix_dict(params['key'])
+        value = await etcd.get_prefix(params['key'])
     else:
         value = await etcd.get(params['key'])
     return web.json_response({'result': value})
