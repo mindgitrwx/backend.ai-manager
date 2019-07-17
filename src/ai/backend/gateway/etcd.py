@@ -237,7 +237,7 @@ class ConfigServer:
         ) > 0
 
         res_limits = []
-        for slot_key, slot_range in item['resource'].items():
+        for slot_key, slot_range in item.get('resource', {}).items():
             min_value = slot_range.get('min')
             if min_value is None:
                 min_value = Decimal(0)
