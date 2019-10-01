@@ -273,6 +273,14 @@ class ModifyScalingGroupInput(graphene.InputObjectType):
     scheduler_opts = graphene.JSONString(required=False)
 
 
+class AssociateScalingGroupWithDomainInput(graphene.InputObjectType):
+    total_resource_slots = graphene.JSONString(required=False)
+
+
+class AssociateScalingGroupWithUserGroupInput(graphene.InputObjectType):
+    total_resource_slots = graphene.JSONString(required=False)
+
+
 class CreateScalingGroup(graphene.Mutation):
 
     class Arguments:
@@ -352,21 +360,21 @@ class AssociateScalingGroupWithDomain(graphene.Mutation):
     class Arguments:
         scaling_group = graphene.String(required=True)
         domain = graphene.String(required=True)
-        total_resource_slots = graphene.JSONString(required=False)
+        props = AssociateScalingGroupWithDomainInput(required=False)
 
     ok = graphene.Boolean()
     msg = graphene.String()
 
     @classmethod
     @privileged_mutation(UserRole.SUPERADMIN)
-    async def mutate(cls, root, info, scaling_group, domain, total_resource_slots):
+    async def mutate(cls, root, info, scaling_group, domain, props):
         insert_query = (
             sgroups_for_domains.insert()
             .values({
                 'scaling_group': scaling_group,
                 'domain': domain,
                 'total_resource_slots': ResourceSlot.from_user_input(
-                    total_resource_slots, None),
+                    props.total_resource_slots, None),
             })
         )
         return await simple_db_mutate(cls, info.context, insert_query)
@@ -417,21 +425,21 @@ class AssociateScalingGroupWithUserGroup(graphene.Mutation):
     class Arguments:
         scaling_group = graphene.String(required=True)
         user_group = graphene.String(required=True)
-        total_resource_slots = graphene.JSONString(required=False)
+        props = AssociateScalingGroupWithUserGroupInput(required=False)
 
     ok = graphene.Boolean()
     msg = graphene.String()
 
     @classmethod
     @privileged_mutation(UserRole.SUPERADMIN)
-    async def mutate(cls, root, info, scaling_group, user_group, total_resource_slots):
+    async def mutate(cls, root, info, scaling_group, user_group, props):
         insert_query = (
             sgroups_for_groups.insert()
             .values({
                 'scaling_group': scaling_group,
                 'group': user_group,
                 'total_resource_slots': ResourceSlot.from_user_input(
-                    total_resource_slots, None),
+                    props.total_resource_slots, None),
             })
         )
         return await simple_db_mutate(cls, info.context, insert_query)
