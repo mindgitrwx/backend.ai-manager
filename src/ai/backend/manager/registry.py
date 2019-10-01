@@ -695,6 +695,25 @@ class AgentRegistry:
                 del key_occupied[k]
             return key_occupied
 
+    async def get_sgroup_occupancy(self, sgroup_name, *, conn=None):
+        # TODO: store scaling group occupied_slots in Redis?
+        known_slot_types = await self.config_server.get_resource_slots()
+        async with reenter_txn(self.dbpool, conn) as conn:
+            query = (
+                sa.select([kernels.c.occupied_slots])
+                .where(
+                    (kernels.c.scaling_group == sgroup_name) &
+                    (kernels.c.status.in_(RESOURCE_OCCUPYING_KERNEL_STATUSES))
+                )
+            )
+            zero = ResourceSlot()
+            key_occupied = sum([row['occupied_slots'] async for row in conn.execute(query)], zero)
+            # drop no-longer used slot types
+            drops = [k for k in key_occupied.keys() if k not in known_slot_types]
+            for k in drops:
+                del key_occupied[k]
+            return key_occupied
+
     async def destroy_session(self, sess_id, access_key, *,
                               domain_name=None):
         async with self.handle_kernel_exception(

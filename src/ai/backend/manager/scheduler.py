@@ -31,7 +31,7 @@ from ai.backend.common.types import (
 from .registry import AgentRegistry
 from .models import (
     agents, domains, groups, kernels, keypairs,
-    keypair_resource_policies,
+    keypair_resource_policies, scaling_groups,
     query_allowed_sgroups,
     AgentStatus, KernelStatus,
 )
@@ -256,6 +256,31 @@ async def check_scaling_group(sched_ctx: SchedulingContext,
     else:
         # Consider all agents in all allowed scaling groups.
         target_sgroup_names = [sgroup['name'] for sgroup in sgroups]
+    # Check sgroup resource limit.
+    for sg in target_sgroup_names:
+        query = (sa.select([scaling_groups.c.total_resource_slots])
+                   .where(scaling_groups.c.name == sg))
+        sg_resource_slots = await sched_ctx.db_conn.scalar(query)
+        sg_resource_policy = {
+            'total_resource_slots': sg_resource_slots,
+            'default_for_unspecified': DefaultForUnspecified.UNLIMITED
+        }
+        total_sg_allowed = ResourceSlot.from_policy(sg_resource_policy,
+                                                    sched_ctx.known_slot_types)
+        sg_occupied = await sched_ctx.registry.get_sgroup_occupancy(
+            sg, conn=sched_ctx.db_conn)
+        log.debug('scaling group:{} current-occupancy: {}', sg, sg_occupied)
+        log.debug('scaling group:{} total-allowed: {}', sg, total_sg_allowed)
+        if not (sg_occupied + sess_ctx.requested_slots <= total_sg_allowed):
+            log.debug(
+                'Scaling group {} resource quota is exceeded. ({})',
+                sg,
+                (' '.join(
+                    f'{k}={v}' for k, v in
+                    total_sg_allowed.to_humanized(sched_ctx.known_slot_types).items()
+                ))
+            )
+            target_sgroup_names.remove(sg)
     log.debug('considered scaling groups: {}', target_sgroup_names)
     if not target_sgroup_names:
         return PredicateResult(False, 'No available scaling groups.')
