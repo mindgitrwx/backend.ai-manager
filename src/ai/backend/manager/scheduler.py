@@ -261,7 +261,7 @@ async def check_scaling_group(sched_ctx: SchedulingContext,
     # Check sgroup resource limit.
     for sg in target_sgroup_names:
         # Scaling group resource limit for target domain.
-        query = (sa.select([sgroups_for_domains.c.total_resource_slots])
+        query = (sa.select([sgroups_for_domains.c.sg_resource_limits])
                    .select_from(sgroups_for_domains)
                    .where(sgroups_for_domains.c.scaling_group == sg)
                    .where(sgroups_for_domains.c.domain == sess_ctx.domain_name))
@@ -292,7 +292,7 @@ async def check_scaling_group(sched_ctx: SchedulingContext,
                 continue
 
         # Scaling group resource limit for target group.
-        query = (sa.select([sgroups_for_groups.c.total_resource_slots])
+        query = (sa.select([sgroups_for_groups.c.sg_resource_limits])
                    .select_from(sgroups_for_groups)
                    .where(sgroups_for_groups.c.scaling_group == sg)
                    .where(sgroups_for_groups.c.group == sess_ctx.group_id))

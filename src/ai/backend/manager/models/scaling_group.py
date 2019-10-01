@@ -69,7 +69,7 @@ sgroups_for_domains = sa.Table(
                             onupdate='CASCADE',
                             ondelete='CASCADE'),
               index=True, nullable=False),
-    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
+    sa.Column('sg_resource_limits', ResourceSlotColumn(), default='{}'),
     sa.UniqueConstraint('scaling_group', 'domain', name='uq_sgroup_domain'),
 )
 
@@ -86,7 +86,7 @@ sgroups_for_groups = sa.Table(
                             onupdate='CASCADE',
                             ondelete='CASCADE'),
               index=True, nullable=False),
-    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
+    sa.Column('sg_resource_limits', ResourceSlotColumn(), default='{}'),
     sa.UniqueConstraint('scaling_group', 'group', name='uq_sgroup_ugroup'),
 )
 
@@ -103,7 +103,7 @@ sgroups_for_keypairs = sa.Table(
                             onupdate='CASCADE',
                             ondelete='CASCADE'),
               index=True, nullable=False),
-    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
+    sa.Column('sg_resource_limits', ResourceSlotColumn(), default='{}'),
     sa.UniqueConstraint('scaling_group', 'access_key', name='uq_sgroup_akey'),
 )
 
