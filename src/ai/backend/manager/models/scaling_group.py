@@ -8,8 +8,9 @@ from sqlalchemy.dialects import postgresql as pgsql
 import graphene
 from graphene.types.datetime import DateTime as GQLDateTime
 
+from ai.backend.common.types import ResourceSlot
 from .base import (
-    metadata, privileged_mutation,
+    metadata, privileged_mutation, ResourceSlotColumn,
     simple_db_mutate,
     simple_db_mutate_returning_item,
     set_if_set,
@@ -49,6 +50,7 @@ scaling_groups = sa.Table(
     sa.Column('driver_opts', pgsql.JSONB(), nullable=False, default={}),
     sa.Column('scheduler', sa.String(length=64), nullable=False),
     sa.Column('scheduler_opts', pgsql.JSONB(), nullable=False, default={}),
+    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
 )
 
 
@@ -151,6 +153,7 @@ class ScalingGroup(graphene.ObjectType):
     driver_opts = graphene.JSONString()
     scheduler = graphene.String()
     scheduler_opts = graphene.JSONString()
+    total_resource_slots = graphene.JSONString()
 
     @classmethod
     def from_row(cls, row):
@@ -165,6 +168,7 @@ class ScalingGroup(graphene.ObjectType):
             driver_opts=row['driver_opts'],
             scheduler=row['scheduler'],
             scheduler_opts=row['scheduler_opts'],
+            total_resource_slots=row['total_resource_slots'].to_json(),
         )
 
     @staticmethod
@@ -258,6 +262,7 @@ class ScalingGroupInput(graphene.InputObjectType):
     driver_opts = graphene.JSONString(required=False, default={})
     scheduler = graphene.String(required=True)
     scheduler_opts = graphene.JSONString(required=False, default={})
+    total_resource_slots = graphene.JSONString(required=False)
 
 
 class ModifyScalingGroupInput(graphene.InputObjectType):
@@ -267,6 +272,7 @@ class ModifyScalingGroupInput(graphene.InputObjectType):
     driver_opts = graphene.JSONString(required=False)
     scheduler = graphene.String(required=False)
     scheduler_opts = graphene.JSONString(required=False)
+    total_resource_slots = graphene.JSONString(required=False)
 
 
 class CreateScalingGroup(graphene.Mutation):
@@ -290,6 +296,8 @@ class CreateScalingGroup(graphene.Mutation):
             'driver_opts': props.driver_opts,
             'scheduler': props.scheduler,
             'scheduler_opts': props.scheduler_opts,
+            'total_resource_slots': ResourceSlot.from_user_input(
+                props.total_resource_slots, None),
         }
         insert_query = scaling_groups.insert().values(data)
         item_query = scaling_groups.select().where(scaling_groups.c.name == name)
@@ -317,6 +325,8 @@ class ModifyScalingGroup(graphene.Mutation):
         set_if_set(props, data, 'driver_opts')
         set_if_set(props, data, 'scheduler')
         set_if_set(props, data, 'scheduler_opts')
+        set_if_set(props, data, 'total_resource_slots',
+                   clean_func=lambda v: ResourceSlot.from_user_input(v, None))
         update_query = (
             scaling_groups.update()
             .values(data)
