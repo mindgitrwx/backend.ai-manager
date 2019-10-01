@@ -31,7 +31,8 @@ from ai.backend.common.types import (
 from .registry import AgentRegistry
 from .models import (
     agents, domains, groups, kernels, keypairs,
-    keypair_resource_policies, scaling_groups,
+    keypair_resource_policies,
+    scaling_groups, sgroups_for_domains, sgroups_for_groups,
     query_allowed_sgroups,
     AgentStatus, KernelStatus,
 )
@@ -256,31 +257,72 @@ async def check_scaling_group(sched_ctx: SchedulingContext,
     else:
         # Consider all agents in all allowed scaling groups.
         target_sgroup_names = [sgroup['name'] for sgroup in sgroups]
+
     # Check sgroup resource limit.
     for sg in target_sgroup_names:
-        query = (sa.select([scaling_groups.c.total_resource_slots])
-                   .where(scaling_groups.c.name == sg))
-        sg_resource_slots = await sched_ctx.db_conn.scalar(query)
-        sg_resource_policy = {
-            'total_resource_slots': sg_resource_slots,
-            'default_for_unspecified': DefaultForUnspecified.UNLIMITED
-        }
-        total_sg_allowed = ResourceSlot.from_policy(sg_resource_policy,
-                                                    sched_ctx.known_slot_types)
-        sg_occupied = await sched_ctx.registry.get_sgroup_occupancy(
-            sg, conn=sched_ctx.db_conn)
-        log.debug('scaling group:{} current-occupancy: {}', sg, sg_occupied)
-        log.debug('scaling group:{} total-allowed: {}', sg, total_sg_allowed)
-        if not (sg_occupied + sess_ctx.requested_slots <= total_sg_allowed):
-            log.debug(
-                'Scaling group {} resource quota is exceeded. ({})',
-                sg,
-                (' '.join(
-                    f'{k}={v}' for k, v in
-                    total_sg_allowed.to_humanized(sched_ctx.known_slot_types).items()
-                ))
-            )
-            target_sgroup_names.remove(sg)
+        # Scaling group resource limit for target domain.
+        query = (sa.select([sgroups_for_domains.c.total_resource_slots])
+                   .select_from(sgroups_for_domains)
+                   .where(sgroups_for_domains.c.scaling_group == sg)
+                   .where(sgroups_for_domains.c.domain == sess_ctx.domain_name))
+        sg_domain_limit = await sched_ctx.db_conn.scalar(query)
+        if sg_domain_limit is not None:
+            sg_domain_resource_policy = {
+                'total_resource_slots': sg_domain_limit,
+                'default_for_unspecified': DefaultForUnspecified.UNLIMITED
+            }
+            sg_domain_allowed = ResourceSlot.from_policy(sg_domain_resource_policy,
+                                                         sched_ctx.known_slot_types)
+            sg_domain_occupied = await sched_ctx.registry.get_domain_occupancy(
+                sess_ctx.domain_name, sgroup=sg, conn=sched_ctx.db_conn)
+            log.debug('scaling group:{} domain:{} current-occupancy: {}',
+                      sg, sess_ctx.domain_name, sg_domain_occupied)
+            log.debug('scaling group:{} domain:{} total-allowed: {}',
+                      sg, sess_ctx.domain_name, sg_domain_allowed)
+            if not (sg_domain_occupied + sess_ctx.requested_slots <= sg_domain_allowed):
+                log.debug(
+                    'Scaling group {} resource quota for domain {} is exceeded. ({})',
+                    sg, sess_ctx.domain_name,
+                    (' '.join(
+                        f'{k}={v}' for k, v in
+                        sg_domain_allowed.to_humanized(sched_ctx.known_slot_types).items()
+                    ))
+                )
+                target_sgroup_names.remove(sg)
+                continue
+
+        # Scaling group resource limit for target group.
+        query = (sa.select([sgroups_for_groups.c.total_resource_slots])
+                   .select_from(sgroups_for_groups)
+                   .where(sgroups_for_groups.c.scaling_group == sg)
+                   .where(sgroups_for_groups.c.group == sess_ctx.group_id))
+        sg_group_limit = await sched_ctx.db_conn.scalar(query)
+        if sg_group_limit is not None:
+            sg_group_resource_policy = {
+                'total_resource_slots': sg_group_limit,
+                'default_for_unspecified': DefaultForUnspecified.UNLIMITED
+            }
+            sg_group_allowed = ResourceSlot.from_policy(sg_group_resource_policy,
+                                                        sched_ctx.known_slot_types)
+            sg_group_occupied = await sched_ctx.registry.get_group_occupancy(
+                sess_ctx.group_name, sgroup=sg, conn=sched_ctx.db_conn)
+            log.debug('scaling group:{} group:{} current-occupancy: {}',
+                      sg, sess_ctx.group_id, sg_group_occupied)
+            log.debug('scaling group:{} group:{} total-allowed: {}',
+                      sg, sess_ctx.group_id, sg_group_allowed)
+            if not (sg_group_occupied + sess_ctx.requested_slots <= sg_group_allowed):
+                log.debug(
+                    'Scaling group {} resource quota for group {} is exceeded. ({})',
+                    sg, sess_ctx.group_id,
+                    (' '.join(
+                        f'{k}={v}' for k, v in
+                        sg_group_allowed.to_humanized(sched_ctx.known_slot_types).items()
+                    ))
+                )
+                target_sgroup_names.remove(sg)
+                continue
+
+        # TODO: scaling group resource limit for target keypair.
     log.debug('considered scaling groups: {}', target_sgroup_names)
     if not target_sgroup_names:
         return PredicateResult(False, 'No available scaling groups.')

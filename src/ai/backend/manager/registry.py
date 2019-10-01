@@ -657,7 +657,7 @@ class AgentRegistry:
                 del key_occupied[k]
             return key_occupied
 
-    async def get_domain_occupancy(self, domain_name, *, conn=None):
+    async def get_domain_occupancy(self, domain_name, *, sgroup=None, conn=None):
         # TODO: store domain occupied_slots in Redis?
         known_slot_types = await self.config_server.get_resource_slots()
         async with reenter_txn(self.dbpool, conn) as conn:
@@ -668,6 +668,8 @@ class AgentRegistry:
                     (kernels.c.status.in_(RESOURCE_OCCUPYING_KERNEL_STATUSES))
                 )
             )
+            if sgroup is not None:
+                query = query.where((kernels.c.scaling_group == sgroup))
             zero = ResourceSlot()
             key_occupied = sum([row['occupied_slots'] async for row in conn.execute(query)], zero)
             # drop no-longer used slot types
@@ -676,7 +678,7 @@ class AgentRegistry:
                 del key_occupied[k]
             return key_occupied
 
-    async def get_group_occupancy(self, group_id, *, conn=None):
+    async def get_group_occupancy(self, group_id, *, sgroup=None, conn=None):
         # TODO: store domain occupied_slots in Redis?
         known_slot_types = await self.config_server.get_resource_slots()
         async with reenter_txn(self.dbpool, conn) as conn:
@@ -687,25 +689,8 @@ class AgentRegistry:
                     (kernels.c.status.in_(RESOURCE_OCCUPYING_KERNEL_STATUSES))
                 )
             )
-            zero = ResourceSlot()
-            key_occupied = sum([row['occupied_slots'] async for row in conn.execute(query)], zero)
-            # drop no-longer used slot types
-            drops = [k for k in key_occupied.keys() if k not in known_slot_types]
-            for k in drops:
-                del key_occupied[k]
-            return key_occupied
-
-    async def get_sgroup_occupancy(self, sgroup_name, *, conn=None):
-        # TODO: store scaling group occupied_slots in Redis?
-        known_slot_types = await self.config_server.get_resource_slots()
-        async with reenter_txn(self.dbpool, conn) as conn:
-            query = (
-                sa.select([kernels.c.occupied_slots])
-                .where(
-                    (kernels.c.scaling_group == sgroup_name) &
-                    (kernels.c.status.in_(RESOURCE_OCCUPYING_KERNEL_STATUSES))
-                )
-            )
+            if sgroup is not None:
+                query = query.where((kernels.c.scaling_group == sgroup))
             zero = ResourceSlot()
             key_occupied = sum([row['occupied_slots'] async for row in conn.execute(query)], zero)
             # drop no-longer used slot types

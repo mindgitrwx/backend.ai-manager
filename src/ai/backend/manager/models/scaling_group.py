@@ -50,7 +50,6 @@ scaling_groups = sa.Table(
     sa.Column('driver_opts', pgsql.JSONB(), nullable=False, default={}),
     sa.Column('scheduler', sa.String(length=64), nullable=False),
     sa.Column('scheduler_opts', pgsql.JSONB(), nullable=False, default={}),
-    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
 )
 
 
@@ -70,6 +69,7 @@ sgroups_for_domains = sa.Table(
                             onupdate='CASCADE',
                             ondelete='CASCADE'),
               index=True, nullable=False),
+    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
     sa.UniqueConstraint('scaling_group', 'domain', name='uq_sgroup_domain'),
 )
 
@@ -86,6 +86,7 @@ sgroups_for_groups = sa.Table(
                             onupdate='CASCADE',
                             ondelete='CASCADE'),
               index=True, nullable=False),
+    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
     sa.UniqueConstraint('scaling_group', 'group', name='uq_sgroup_ugroup'),
 )
 
@@ -102,6 +103,7 @@ sgroups_for_keypairs = sa.Table(
                             onupdate='CASCADE',
                             ondelete='CASCADE'),
               index=True, nullable=False),
+    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
     sa.UniqueConstraint('scaling_group', 'access_key', name='uq_sgroup_akey'),
 )
 
