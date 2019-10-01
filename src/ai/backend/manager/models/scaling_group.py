@@ -155,7 +155,6 @@ class ScalingGroup(graphene.ObjectType):
     driver_opts = graphene.JSONString()
     scheduler = graphene.String()
     scheduler_opts = graphene.JSONString()
-    total_resource_slots = graphene.JSONString()
 
     @classmethod
     def from_row(cls, row):
@@ -170,7 +169,6 @@ class ScalingGroup(graphene.ObjectType):
             driver_opts=row['driver_opts'],
             scheduler=row['scheduler'],
             scheduler_opts=row['scheduler_opts'],
-            total_resource_slots=row['total_resource_slots'].to_json(),
         )
 
     @staticmethod
@@ -264,7 +262,6 @@ class ScalingGroupInput(graphene.InputObjectType):
     driver_opts = graphene.JSONString(required=False, default={})
     scheduler = graphene.String(required=True)
     scheduler_opts = graphene.JSONString(required=False, default={})
-    total_resource_slots = graphene.JSONString(required=False)
 
 
 class ModifyScalingGroupInput(graphene.InputObjectType):
@@ -274,7 +271,6 @@ class ModifyScalingGroupInput(graphene.InputObjectType):
     driver_opts = graphene.JSONString(required=False)
     scheduler = graphene.String(required=False)
     scheduler_opts = graphene.JSONString(required=False)
-    total_resource_slots = graphene.JSONString(required=False)
 
 
 class CreateScalingGroup(graphene.Mutation):
@@ -298,8 +294,6 @@ class CreateScalingGroup(graphene.Mutation):
             'driver_opts': props.driver_opts,
             'scheduler': props.scheduler,
             'scheduler_opts': props.scheduler_opts,
-            'total_resource_slots': ResourceSlot.from_user_input(
-                props.total_resource_slots, None),
         }
         insert_query = scaling_groups.insert().values(data)
         item_query = scaling_groups.select().where(scaling_groups.c.name == name)
@@ -327,8 +321,6 @@ class ModifyScalingGroup(graphene.Mutation):
         set_if_set(props, data, 'driver_opts')
         set_if_set(props, data, 'scheduler')
         set_if_set(props, data, 'scheduler_opts')
-        set_if_set(props, data, 'total_resource_slots',
-                   clean_func=lambda v: ResourceSlot.from_user_input(v, None))
         update_query = (
             scaling_groups.update()
             .values(data)
@@ -360,18 +352,21 @@ class AssociateScalingGroupWithDomain(graphene.Mutation):
     class Arguments:
         scaling_group = graphene.String(required=True)
         domain = graphene.String(required=True)
+        total_resource_slots = graphene.JSONString(required=False)
 
     ok = graphene.Boolean()
     msg = graphene.String()
 
     @classmethod
     @privileged_mutation(UserRole.SUPERADMIN)
-    async def mutate(cls, root, info, scaling_group, domain):
+    async def mutate(cls, root, info, scaling_group, domain, total_resource_slots):
         insert_query = (
             sgroups_for_domains.insert()
             .values({
                 'scaling_group': scaling_group,
                 'domain': domain,
+                'total_resource_slots': ResourceSlot.from_user_input(
+                    total_resource_slots, None),
             })
         )
         return await simple_db_mutate(cls, info.context, insert_query)
@@ -422,18 +417,21 @@ class AssociateScalingGroupWithUserGroup(graphene.Mutation):
     class Arguments:
         scaling_group = graphene.String(required=True)
         user_group = graphene.String(required=True)
+        total_resource_slots = graphene.JSONString(required=False)
 
     ok = graphene.Boolean()
     msg = graphene.String()
 
     @classmethod
     @privileged_mutation(UserRole.SUPERADMIN)
-    async def mutate(cls, root, info, scaling_group, user_group):
+    async def mutate(cls, root, info, scaling_group, user_group, total_resource_slots):
         insert_query = (
             sgroups_for_groups.insert()
             .values({
                 'scaling_group': scaling_group,
                 'group': user_group,
+                'total_resource_slots': ResourceSlot.from_user_input(
+                    total_resource_slots, None),
             })
         )
         return await simple_db_mutate(cls, info.context, insert_query)
@@ -466,18 +464,21 @@ class AssociateScalingGroupWithKeyPair(graphene.Mutation):
     class Arguments:
         scaling_group = graphene.String(required=True)
         access_key = graphene.String(required=True)
+        total_resource_slots = graphene.JSONString(required=False)
 
     ok = graphene.Boolean()
     msg = graphene.String()
 
     @classmethod
     @privileged_mutation(UserRole.SUPERADMIN)
-    async def mutate(cls, root, info, scaling_group, access_key):
+    async def mutate(cls, root, info, scaling_group, access_key, total_resource_slots):
         insert_query = (
             sgroups_for_keypairs.insert()
             .values({
                 'scaling_group': scaling_group,
                 'access_key': access_key,
+                'total_resource_slots': ResourceSlot.from_user_input(
+                    total_resource_slots, None),
             })
         )
         return await simple_db_mutate(cls, info.context, insert_query)
