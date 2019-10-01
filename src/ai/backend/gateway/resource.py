@@ -35,7 +35,7 @@ from .exceptions import (
 from .manager import READ_ALLOWED, server_status_required
 from ..manager.models import (
     agents, resource_presets,
-    domains, groups, kernels, keypairs, users,
+    domains, groups, kernels, keypairs, scaling_groups, users,
     AgentStatus,
     association_groups_users,
     query_allowed_sgroups,
@@ -117,19 +117,27 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
         keypair_occupied = await registry.get_keypair_occupancy(access_key, conn=conn)
         keypair_remaining = keypair_limits - keypair_occupied
 
-        # Check group resource limit.
-        query = (sa.select([groups.c.id, groups.c.total_resource_slots])
-                   .where(domains.c.name == domain_name)
-                   .where(groups.c.name == params['group']))
+        # Check group resource limit and get group_id.
+        j = sa.join(groups, association_groups_users,
+                    association_groups_users.c.group_id == groups.c.id)
+        query = (sa.select([groups.c.total_resource_slots, groups.c.id])
+                   .select_from(j)
+                   .where(
+                       (association_groups_users.c.user_id == request['user']['uuid']) &
+                       (groups.c.name == params['group']) &
+                       (domains.c.name == domain_name)))
         result = await conn.execute(query)
         row = await result.fetchone()
+        group_id = row.id
         group_resource_slots = row.total_resource_slots
+        if group_id is None:
+            raise InvalidAPIParameters('Unknown user group')
         group_resource_policy = {
             'total_resource_slots': group_resource_slots,
-            'default_for_unspecified': DefaultForUnspecified.UNLIMITED
+            'default_for_unspecified': DefaultForUnspecified.UNLIMITED,
         }
         group_limits = ResourceSlot.from_policy(group_resource_policy, known_slot_types)
-        group_occupied = await registry.get_group_occupancy(row.id, conn=conn)
+        group_occupied = await registry.get_group_occupancy(group_id, conn=conn)
         group_remaining = group_limits - group_occupied
 
         # Check domain resource limit.
@@ -138,104 +146,109 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
         domain_resource_slots = await conn.scalar(query)
         domain_resource_policy = {
             'total_resource_slots': domain_resource_slots,
-            'default_for_unspecified': DefaultForUnspecified.UNLIMITED
+            'default_for_unspecified': DefaultForUnspecified.UNLIMITED,
         }
         domain_limits = ResourceSlot.from_policy(domain_resource_policy, known_slot_types)
         domain_occupied = await registry.get_domain_occupancy(domain_name, conn=conn)
         domain_remaining = domain_limits - domain_occupied
 
-        # Take minimum remaining resources. There's no need to merge limits and occupied.
-        # To keep legacy, we just merge all remaining slots into `keypair_remainig`.
+        # Take minimum remaining resources. There's no need to merge limits
+        # and occupied. To keep legacy, we just merge all remaining slots into
+        # `keypair_remainig`.
+        # NOTE: do we have to take into account sgroup_remaining here?
         for slot in known_slot_types:
             keypair_remaining[slot] = min(
                 keypair_remaining[slot],
                 group_remaining[slot],
                 domain_remaining[slot],
             )
-        # query all agent's capacity and occupancy
-        agent_slots = []
 
-        j = sa.join(groups, association_groups_users,
-                    association_groups_users.c.group_id == groups.c.id)
-        query = (
-            sa.select([association_groups_users.c.group_id])
-            .select_from(j)
-            .where(
-                (association_groups_users.c.user_id == request['user']['uuid']) &
-                (groups.c.name == params['group'])
-            )
-        )
-        group_id = await conn.scalar(query)
-        if group_id is None:
-            raise InvalidAPIParameters('Unknown user group')
-
-        sgroups = await query_allowed_sgroups(conn, domain_name,
-                                              group_id, access_key)
-        sgroups = [sg.name for sg in sgroups]
+        # Get allowed scaling groups and prepare per scaling group resource info.
+        sgroups = await query_allowed_sgroups(conn, domain_name, group_id, access_key)
+        sgroup_limits = {
+            sg.name: ResourceSlot.from_policy(
+                {
+                    'total_resource_slots': sg.total_resource_slots,
+                    'default_for_unspecified': DefaultForUnspecified.UNLIMITED,
+                },
+                known_slot_types
+            ) for sg in sgroups
+        }
+        sgroup_names = sgroup_limits.keys()
         if params['scaling_group'] is not None:
-            if params['scaling_group'] not in sgroups:
+            if params['scaling_group'] not in sgroup_names:
                 raise InvalidAPIParameters('Unknown scaling group')
-            sgroups = [params['scaling_group']]
-
-        # Per scaling group resource remaining.
+            sgroup_names = [params['scaling_group']]
         per_sgroup = {
             sgname: {
                 'using': ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()}),
                 'remaining': ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()}),
-            } for sgname in sgroups
+            } for sgname in sgroup_names
         }
         sgroup_remaining = ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()})
-        query = (
-            sa.select([agents.c.available_slots, agents.c.occupied_slots, agents.c.scaling_group])
-            .select_from(agents)
-            .where(
-                (agents.c.status == AgentStatus.ALIVE) &
-                (agents.c.scaling_group.in_(sgroups))
-            )
-        )
+
+        # Per scaling group resource using from resource occupying kernels.
+        query = (sa.select([kernels.c.occupied_slots, kernels.c.scaling_group])
+                   .select_from(kernels)
+                   .where(
+                       (kernels.c.user_uuid == request['user']['uuid']) &
+                       (kernels.c.status.in_(RESOURCE_OCCUPYING_KERNEL_STATUSES)) &
+                       (kernels.c.scaling_group.in_(sgroup_names))))
+        async for row in conn.execute(query):
+            per_sgroup[row.scaling_group]['using'] += row.occupied_slots
+
+        # Per scaling group resource remaining from agents stats.
+        query = (sa.select([agents.c.id,
+                            agents.c.available_slots,
+                            agents.c.occupied_slots,
+                            agents.c.scaling_group])
+                   .select_from(agents)
+                   .where((agents.c.status == AgentStatus.ALIVE) &
+                          (agents.c.scaling_group.in_(sgroup_names))))
+        agent_slots = defaultdict(lambda: 0)
         async for row in conn.execute(query):
             remaining = row['available_slots'] - row['occupied_slots']
             remaining += ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()})
             sgroup_remaining += remaining
-            agent_slots.append(remaining)
+            agent_slots[row.id] = {
+                'sgroup': row.scaling_group,
+                'remaining': remaining,
+            }
             per_sgroup[row.scaling_group]['remaining'] += remaining
-        query = (
-            sa.select([kernels.c.occupied_slots, kernels.c.scaling_group])
-            .select_from(kernels)
-            .where(
-                (kernels.c.user_uuid == request['user']['uuid']) &
-                (kernels.c.status.in_(RESOURCE_OCCUPYING_KERNEL_STATUSES)) &
-                (kernels.c.scaling_group.in_(sgroups))
-            )
-        )
-        async for row in conn.execute(query):
-            per_sgroup[row.scaling_group]['using'] += row.occupied_slots
+
+        # Take maximum allocatable resources per sgroup.
+        # Scaling group's limit should be considered.
         for sgname, sgfields in per_sgroup.items():
+            _limits = sgroup_limits[sgname]
+            _occupied = sgfields['using']
+            _remaining = min(_limits - _occupied, sgfields['remaining'])
+            sgfields['remaining'] = _remaining  # sgroup's limit considered
             for rtype, slots in sgfields.items():
-                if not rtype == 'using':
+                if rtype == 'remaining':
                     for slot in known_slot_types.keys():
                         if slot in slots:
-                            slots[slot] = min(keypair_remaining[slot], slots[slot])
-                per_sgroup[sgname][rtype] = slots.to_json()  # type: ignore  # it's serialization
+                            slots[slot] = min(
+                                keypair_remaining[slot],  # keypair's limit considered
+                                slots[slot]
+                            )
         for slot in known_slot_types.keys():
             sgroup_remaining[slot] = min(keypair_remaining[slot], sgroup_remaining[slot])
 
-        resp['keypair_limits'] = keypair_limits.to_json()
-        resp['keypair_using'] = keypair_occupied.to_json()
-        resp['keypair_remaining'] = keypair_remaining.to_json()
-        resp['scaling_group_remaining'] = sgroup_remaining.to_json()
-        resp['scaling_groups'] = per_sgroup
-
-        # fetch all resource presets in the current scaling group.
+        # Fetch all resource presets in the current scaling group.
         query = (
             sa.select([resource_presets])
             .select_from(resource_presets))
         async for row in conn.execute(query):
-            # check if there are any agent that can allocate each preset
+            # Check if there are any agent that can allocate each preset.
+            # Also, scaling group's remaining slots are taken into account.
             allocatable = False
             preset_slots = row['resource_slots'].filter_slots(known_slot_types)
-            for agent_slot in agent_slots:
-                if agent_slot >= preset_slots and keypair_remaining >= preset_slots:
+            for agent_info in agent_slots.values():
+                sg = agent_info['sgroup']
+                agent_slot = agent_info['remaining']
+                if agent_slot >= preset_slots and \
+                        per_sgroup[sg]['remaining'] >= preset_slots \
+                        and keypair_remaining >= preset_slots:
                     allocatable = True
                     break
             resp['presets'].append({
@@ -243,6 +256,17 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
                 'resource_slots': preset_slots.to_json(),
                 'allocatable': allocatable,
             })
+
+        # Serialize per-sgroup slots.
+        for sgname, sgfields in per_sgroup.items():
+            for rtype, slots in sgfields.items():
+                per_sgroup[sgname][rtype] = slots.to_json()  # type: ignore  # it's serialization
+
+        resp['keypair_limits'] = keypair_limits.to_json()
+        resp['keypair_using'] = keypair_occupied.to_json()
+        resp['keypair_remaining'] = keypair_remaining.to_json()
+        resp['scaling_group_remaining'] = sgroup_remaining.to_json()
+        resp['scaling_groups'] = per_sgroup
     return web.json_response(resp, status=200)
 
 
