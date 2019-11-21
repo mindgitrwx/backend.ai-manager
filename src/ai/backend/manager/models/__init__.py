@@ -1,6 +1,7 @@
 from .base import metadata
 
 from . import agent as _agent
+from . import deployment as _deployment
 from . import domain as _domain
 from . import group as _group
 from . import image as _image
@@ -11,10 +12,12 @@ from . import vfolder as _vfolder
 from . import resource_policy as _rpolicy
 from . import resource_preset as _rpreset
 from . import scaling_group as _sgroup
+from . import task_templates as _task_templates
 
 __all__ = (
     'metadata',
     *_agent.__all__,
+    *_deployment.__all__,
     *_domain.__all__,
     *_group.__all__,
     *_image.__all__,
@@ -25,9 +28,11 @@ __all__ = (
     *_rpolicy.__all__,
     *_rpreset.__all__,
     *_sgroup.__all__,
+    *_task_templates.__all__,
 )
 
 from .agent import *  # noqa
+from .deployment import *  # noqa
 from .domain import *  # noqa
 from .group import *  # noqa
 from .image import *  # noqa
@@ -38,3 +43,4 @@ from .vfolder import *  # noqa
 from .resource_policy import *  # noqa
 from .resource_preset import *  # noqa
 from .scaling_group import *  # noqa
+from .task_templates import *  # noqa

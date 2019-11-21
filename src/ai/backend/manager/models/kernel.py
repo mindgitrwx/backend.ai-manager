@@ -94,6 +94,8 @@ kernels = sa.Table(
     sa.Column('registry', sa.String(length=512)),
     sa.Column('tag', sa.String(length=64), nullable=True),
 
+    sa.Column('deployment', sa.ForeignKey('deployments.id'), index=True, nullable=True),
+
     # Resource occupation
     sa.Column('container_id', sa.String(length=64)),
     sa.Column('occupied_slots', ResourceSlotColumn(), nullable=False),
@@ -183,6 +185,7 @@ class SessionCommons:
 
     occupied_slots = graphene.JSONString()
     occupied_shares = graphene.JSONString()
+    environ = graphene.List(lambda: graphene.List(lambda: graphene.String))
     mounts = graphene.List(lambda: graphene.List(lambda: graphene.String))
     resource_opts = graphene.JSONString()
 
