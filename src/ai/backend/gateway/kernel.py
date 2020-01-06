@@ -203,9 +203,12 @@ async def _create(request: web.Request, params: Any, dbpool) -> web.Response:
     try:
         requested_image_ref = \
             await ImageRef.resolve_alias(params['image'], request.app['config_server'].etcd)
+        # TODO: take into account allowed_docker_registries for group/keypair resource policies.
         async with dbpool.acquire() as conn, conn.begin():
-            query = (sa.select([domains.c.allowed_docker_registries])
-                       .select_from(domains)
+            j = (sa.join(domains, keypair_resource_policies,
+                         domains.c.resource_policy == keypair_resource_policies.c.name))
+            query = (sa.select([keypair_resource_policies.c.allowed_docker_registries])
+                       .select_from(j)
                        .where(domains.c.name == params['domain']))
             allowed_registries = await conn.scalar(query)
             if requested_image_ref.registry not in allowed_registries:

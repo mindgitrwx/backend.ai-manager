@@ -38,7 +38,7 @@ from .exceptions import (
 from .manager import READ_ALLOWED, server_status_required
 from ..manager.models import (
     agents, resource_presets,
-    domains, groups, kernels, keypairs, users,
+    domains, groups, kernels, keypairs, keypair_resource_policies, users,
     AgentStatus,
     association_groups_users,
     query_allowed_sgroups,
@@ -95,7 +95,7 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
     '''
     try:
         access_key = request['keypair']['access_key']
-        resource_policy = request['keypair']['resource_policy']
+        keypair_resource_policy = request['keypair']['resource_policy']
         domain_name = request['user']['domain_name']
         # TODO: uncomment when we implement scaling group.
         # scaling_group = request.query.get('scaling_group')
@@ -117,14 +117,17 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
 
     async with request.app['dbpool'].acquire() as conn, conn.begin():
         # Check keypair resource limit.
-        keypair_limits = ResourceSlot.from_policy(resource_policy, known_slot_types)
+        keypair_limits = ResourceSlot.from_policy(keypair_resource_policy, known_slot_types)
         keypair_occupied = await registry.get_keypair_occupancy(access_key, conn=conn)
         keypair_remaining = keypair_limits - keypair_occupied
 
         # Check group resource limit and get group_id.
-        j = sa.join(groups, association_groups_users,
-                    association_groups_users.c.group_id == groups.c.id)
-        query = (sa.select([groups.c.id, groups.c.total_resource_slots])
+        j = (groups
+             .join(association_groups_users,
+                   association_groups_users.c.group_id == groups.c.id)
+             .join(keypair_resource_policies,
+                   keypair_resource_policies.c.name == groups.c.resource_policy, isouter=True))
+        query = (sa.select([groups.c.id, keypair_resource_policies.c.total_resource_slots])
                    .select_from(j)
                    .where(
                        (association_groups_users.c.user_id == request['user']['uuid']) &
@@ -132,10 +135,13 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
                        (domains.c.name == domain_name)))
         result = await conn.execute(query)
         row = await result.fetchone()
-        group_id = row.id
-        group_resource_slots = row.total_resource_slots
-        if group_id is None:
+        if row.id is None:
             raise InvalidAPIParameters('Unknown user group')
+        if 'total_resource_slots' in row and row.total_resource_slots is not None:
+            group_resource_slots = row.total_resource_slots
+        else:
+            group_resource_slots = {}
+        group_id = row.id
         group_resource_policy = {
             'total_resource_slots': group_resource_slots,
             'default_for_unspecified': DefaultForUnspecified.UNLIMITED
@@ -145,9 +151,18 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
         group_remaining = group_limits - group_occupied
 
         # Check domain resource limit.
-        query = (sa.select([domains.c.total_resource_slots])
+        j = (domains
+             .join(keypair_resource_policies,
+                   keypair_resource_policies.c.name == domains.c.resource_policy, isouter=True))
+        query = (sa.select([keypair_resource_policies.c.total_resource_slots])
+                   .select_from(j)
                    .where(domains.c.name == domain_name))
-        domain_resource_slots = await conn.scalar(query)
+        result = await conn.execute(query)
+        row = await result.fetchone()
+        if 'total_resource_slots' in row and row.total_resource_slots is not None:
+            domain_resource_slots = row.total_resource_slots
+        else:
+            domain_resource_slots = {}
         domain_resource_policy = {
             'total_resource_slots': domain_resource_slots,
             'default_for_unspecified': DefaultForUnspecified.UNLIMITED

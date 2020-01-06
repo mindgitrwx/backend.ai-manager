@@ -4,9 +4,7 @@
             "name": "default",
             "description": "The default domain",
             "is_active": true,
-            "total_resource_slots": {},
-            "allowed_vfolder_hosts": {},
-            "allowed_docker_registries": ["index.docker.io"]
+            "resource_policy": "default"
         }
     ],
     "groups": [
@@ -16,8 +14,7 @@
             "description": "The default user group",
             "is_active": true,
             "domain_name": "default",
-            "total_resource_slots": {},
-            "allowed_vfolder_hosts": {}
+            "resource_policy": "default"
         }
     ],
     "scaling_groups": [
@@ -115,7 +112,8 @@
             "max_vfolder_count": 10,
             "max_vfolder_size": 0,
             "idle_timeout": 600,
-            "allowed_vfolder_hosts": ["local", "other-host"]
+            "allowed_vfolder_hosts": ["local"],
+            "allowed_docker_registries": ["index.docker.io"]
         }
     ],
     "keypairs": [

@@ -115,7 +115,10 @@ async def check_keypair_resource_limit(sched_ctx: SchedulingContext,
 
 async def check_group_resource_limit(sched_ctx: SchedulingContext,
                                      sess_ctx: PendingSession) -> PredicateResult:
-    query = (sa.select([groups.c.total_resource_slots])
+    j = (sa.join(groups, keypair_resource_policies,
+                 groups.c.resource_policy == keypair_resource_policies.c.name))
+    query = (sa.select([keypair_resource_policies.c.total_resource_slots])
+               .select_from(j)
                .where(groups.c.id == sess_ctx.group_id))
     group_resource_slots = await sched_ctx.db_conn.scalar(query)
     group_resource_policy = {'total_resource_slots': group_resource_slots,
@@ -152,7 +155,10 @@ async def check_group_resource_limit(sched_ctx: SchedulingContext,
 
 async def check_domain_resource_limit(sched_ctx: SchedulingContext,
                                       sess_ctx: PendingSession) -> PredicateResult:
-    query = (sa.select([domains.c.total_resource_slots])
+    j = (sa.join(domains, keypair_resource_policies,
+                 domains.c.resource_policy == keypair_resource_policies.c.name))
+    query = (sa.select([keypair_resource_policies.c.total_resource_slots])
+               .select_from(j)
                .where(domains.c.name == sess_ctx.domain_name))
     domain_resource_slots = await sched_ctx.db_conn.scalar(query)
     domain_resource_policy = {
