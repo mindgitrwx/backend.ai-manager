@@ -136,6 +136,8 @@ class ResourceSlotColumn(TypeDecorator):
 
     def process_result_value(self, value: Dict[str, str], dialect):
         # legacy handling
+        if value is None:  # Sometimes, ResourceSlotColumn may be None.
+            return None
         mem = value.get('mem')
         if isinstance(mem, str) and not mem.isdigit():
             value['mem'] = BinarySize.from_str(mem)
