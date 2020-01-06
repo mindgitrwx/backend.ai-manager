@@ -11,14 +11,51 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql as pgsql
 from ai.backend.common.types import DefaultForUnspecified
-from ai.backend.manager.models import domains, groups, keypair_resource_policies
-from ai.backend.manager.models.base import ResourceSlotColumn
+from ai.backend.manager.models.base import convention, EnumType, IDColumn, ResourceSlotColumn
 
 # revision identifiers, used by Alembic.
 revision = 'd858d54c361c'
 down_revision = 'ce209920f654'
 branch_labels = None
 depends_on = None
+
+
+metadata = sa.MetaData(naming_convention=convention)
+domains = sa.Table(
+    'domains', metadata,
+    sa.Column('name', sa.String(length=64), primary_key=True),
+    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
+    sa.Column('allowed_vfolder_hosts', pgsql.ARRAY(sa.String), default='{}'),
+    sa.Column('allowed_docker_registries', pgsql.ARRAY(sa.String), default='{}'),
+    sa.Column('resource_policy', sa.String(length=256), nullable=True),
+)
+groups = sa.Table(
+    'groups', metadata,
+    IDColumn('id'),
+    sa.Column('name', sa.String(length=64), nullable=False),
+    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
+    sa.Column('allowed_vfolder_hosts', pgsql.ARRAY(sa.String), default='{}'),
+    sa.Column('resource_policy', sa.String(length=256), nullable=True),
+)
+keypair_resource_policies = sa.Table(
+    'keypair_resource_policies', metadata,
+    sa.Column('name', sa.String(length=256), primary_key=True),
+    sa.Column('created_at', sa.DateTime(timezone=True),
+              server_default=sa.func.now()),
+    sa.Column('default_for_unspecified',
+              EnumType(DefaultForUnspecified),
+              default=DefaultForUnspecified.LIMITED,
+              nullable=False),
+    sa.Column('total_resource_slots', ResourceSlotColumn(), nullable=False),
+    sa.Column('max_concurrent_sessions', sa.Integer(), nullable=False),
+    sa.Column('max_containers_per_session', sa.Integer(), nullable=False),
+    sa.Column('max_vfolder_count', sa.Integer(), nullable=False),
+    sa.Column('max_vfolder_size', sa.BigInteger(), nullable=False),
+    sa.Column('idle_timeout', sa.BigInteger(), nullable=False),
+    sa.Column('allowed_vfolder_hosts', pgsql.ARRAY(sa.String), nullable=False),
+    sa.Column('allowed_docker_registries', pgsql.ARRAY(sa.String), default='{}'),
+)
+
 
 
 def upgrade():
@@ -36,7 +73,7 @@ def upgrade():
 
     # ### Domain's resource policy.
     # Add `resource_policy` to `domains`.
-    op.add_column('domains', sa.Column('resource_policy', sa.String(length=256), nullable=True))
+    op.add_column('domains', sa.Column('resource_policy', sa.String(length=256), nullable=True, index=True))
     op.create_foreign_key(
         op.f('fk_domains_resource_policy_keypair_resource_policies'),
         'domains', 'keypair_resource_policies',
@@ -81,7 +118,7 @@ def upgrade():
 
     # ### Add `resource_policy` to `groups`.
     # Add `resource_policy` to `groups`.
-    op.add_column('groups', sa.Column('resource_policy', sa.String(length=256), nullable=True))
+    op.add_column('groups', sa.Column('resource_policy', sa.String(length=256), nullable=True, index=True))
     op.create_foreign_key(
         op.f('fk_groups_resource_policy_keypair_resource_policies'),
         'groups', 'keypair_resource_policies',
@@ -139,8 +176,9 @@ def downgrade():
     for group in conn.execute(query).fetchall():
         if not group.resource_policy:
             data = {
-                'total_resource_slots': '{}',
-                'allowed_vfolder_hosts': '{}',
+                'total_resource_slots': {},
+                'allowed_vfolder_hosts': {},
+                'resource_policy': None,
             }
         else:
             policy_name = f'_auto_generated_group_policy_{group.name}_{group.id}'
@@ -159,7 +197,7 @@ def downgrade():
                 'resource_policy': None,
             }
         query = (groups.update().values(data)
-                        .where(groups.c.name == group.name))
+                       .where(groups.c.name == group.name))
         conn.execute(query)
     op.alter_column('groups', column_name='allowed_vfolder_hosts', nullable=False)
     # Delete auto-generated group resource policies.
@@ -188,9 +226,10 @@ def downgrade():
     for domain in conn.execute(query).fetchall():
         if not domain.resource_policy:
             data = {
-                'total_resource_slots': '{}',
-                'allowed_vfolder_hosts': '{}',
-                'allowed_docker_registries': '{}',
+                'total_resource_slots': {},
+                'allowed_vfolder_hosts': {},
+                'allowed_docker_registries': {},
+                'resource_policy': None,
             }
         else:
             policy_name = f'_auto_generated_domain_policy_{domain.name}'
