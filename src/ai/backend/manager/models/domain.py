@@ -15,6 +15,7 @@ from .base import (
     simple_db_mutate_returning_item,
     set_if_set,
 )
+from .resource_policy import KeyPairResourcePolicy
 from .scaling_group import ScalingGroup
 from .user import UserRole
 
@@ -35,10 +36,9 @@ domains = sa.Table(
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
     sa.Column('modified_at', sa.DateTime(timezone=True),
               server_default=sa.func.now(), onupdate=sa.func.current_timestamp()),
+    sa.Column('resource_policy', sa.String(length=256),
+              sa.ForeignKey('keypair_resource_policies.name'), index=True),
     # TODO: separate resource-related fields with new domain resource policy table when needed.
-    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
-    sa.Column('allowed_vfolder_hosts', pgsql.ARRAY(sa.String), nullable=False, default='{}'),
-    sa.Column('allowed_docker_registries', pgsql.ARRAY(sa.String), nullable=False, default='{}'),
     #: Field for synchronization with external services.
     sa.Column('integration_id', sa.String(length=512)),
 )
@@ -50,17 +50,38 @@ class Domain(graphene.ObjectType):
     is_active = graphene.Boolean()
     created_at = GQLDateTime()
     modified_at = GQLDateTime()
-    total_resource_slots = graphene.JSONString()
-    allowed_vfolder_hosts = graphene.List(lambda: graphene.String)
-    allowed_docker_registries = graphene.List(lambda: graphene.String)
+    resource_policy = graphene.String()
     integration_id = graphene.String()
 
     # Dynamic fields.
     scaling_groups = graphene.List(lambda: graphene.String)
 
+    # Legacy fields.
+    total_resource_slots = graphene.JSONString()
+    allowed_vfolder_hosts = graphene.List(lambda: graphene.String)
+    allowed_docker_registries = graphene.List(lambda: graphene.String)
+
     async def resolve_scaling_groups(self, info):
         sgroups = await ScalingGroup.load_by_domain(info.context, self.name)
         return [sg.name for sg in sgroups]
+
+    async def resolve_total_resource_slots(self, info):
+        if self.resource_policy is None:
+            return {}
+        policy = await KeyPairResourcePolicy.load_by_name(info.context, self.resource_policy)
+        return policy.total_resource_slots
+
+    async def resolve_allowed_vfolder_hosts(self, info):
+        if self.resource_policy is None:
+            return {}
+        policy = await KeyPairResourcePolicy.load_by_name(info.context, self.resource_policy)
+        return policy.allowed_vfolder_hosts
+
+    async def resolve_allowed_docker_registries(self, info):
+        if self.resource_policy is None:
+            return {}
+        policy = await KeyPairResourcePolicy.load_by_name(info.context, self.resource_policy)
+        return policy.allowed_docker_registries
 
     @classmethod
     def from_row(cls, row):
@@ -72,9 +93,7 @@ class Domain(graphene.ObjectType):
             is_active=row['is_active'],
             created_at=row['created_at'],
             modified_at=row['modified_at'],
-            total_resource_slots=row['total_resource_slots'].to_json(),
-            allowed_vfolder_hosts=row['allowed_vfolder_hosts'],
-            allowed_docker_registries=row['allowed_docker_registries'],
+            resource_policy=row['resource_policy'],
             integration_id=row['integration_id'],
         )
 
@@ -111,9 +130,7 @@ class Domain(graphene.ObjectType):
 class DomainInput(graphene.InputObjectType):
     description = graphene.String(required=False)
     is_active = graphene.Boolean(required=False, default=True)
-    total_resource_slots = graphene.JSONString(required=False)
-    allowed_vfolder_hosts = graphene.List(lambda: graphene.String, required=False)
-    allowed_docker_registries = graphene.List(lambda: graphene.String, required=False)
+    resource_policy = graphene.String(required=False)
     integration_id = graphene.String(required=False)
 
 
@@ -121,9 +138,7 @@ class ModifyDomainInput(graphene.InputObjectType):
     name = graphene.String(required=False)
     description = graphene.String(required=False)
     is_active = graphene.Boolean(required=False)
-    total_resource_slots = graphene.JSONString(required=False)
-    allowed_vfolder_hosts = graphene.List(lambda: graphene.String, required=False)
-    allowed_docker_registries = graphene.List(lambda: graphene.String, required=False)
+    resource_policy = graphene.String(required=False)
     integration_id = graphene.String(required=False)
 
 
@@ -146,10 +161,7 @@ class CreateDomain(graphene.Mutation):
             'name': name,
             'description': props.description,
             'is_active': props.is_active,
-            'total_resource_slots': ResourceSlot.from_user_input(
-                props.total_resource_slots, None),
-            'allowed_vfolder_hosts': props.allowed_vfolder_hosts,
-            'allowed_docker_registries': props.allowed_docker_registries,
+            'resource_policy': props.resource_policy,
             'integration_id': props.integration_id,
         }
         insert_query = (
@@ -179,10 +191,7 @@ class ModifyDomain(graphene.Mutation):
         set_if_set(props, data, 'name')  # data['name'] is new domain name
         set_if_set(props, data, 'description')
         set_if_set(props, data, 'is_active')
-        set_if_set(props, data, 'total_resource_slots',
-                   clean_func=lambda v: ResourceSlot.from_user_input(v, None))
-        set_if_set(props, data, 'allowed_vfolder_hosts')
-        set_if_set(props, data, 'allowed_docker_registries')
+        set_if_set(props, data, 'resource_policy')
         set_if_set(props, data, 'integration_id')
         if 'name' in data:
             assert _rx_slug.search(data['name']) is not None, \

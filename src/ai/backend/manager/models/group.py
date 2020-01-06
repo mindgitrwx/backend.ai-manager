@@ -59,9 +59,8 @@ groups = sa.Table(
     sa.Column('domain_name', sa.String(length=64),
               sa.ForeignKey('domains.name', onupdate='CASCADE', ondelete='CASCADE'),
               nullable=False, index=True),
-    # TODO: separate resource-related fields with new domain resource policy table when needed.
-    sa.Column('total_resource_slots', ResourceSlotColumn(), default='{}'),
-    sa.Column('allowed_vfolder_hosts', pgsql.ARRAY(sa.String), nullable=False, default='{}'),
+    sa.Column('resource_policy', sa.String(length=256),
+              sa.ForeignKey('keypair_resource_policies.name'), index=True),
     sa.UniqueConstraint('name', 'domain_name', name='uq_groups_name_domain_name')
 )
 
@@ -101,11 +100,14 @@ class Group(graphene.ObjectType):
     created_at = GQLDateTime()
     modified_at = GQLDateTime()
     domain_name = graphene.String()
-    total_resource_slots = graphene.JSONString()
-    allowed_vfolder_hosts = graphene.List(lambda: graphene.String)
+    resource_policy = graphene.String()
     integration_id = graphene.String()
 
     scaling_groups = graphene.List(lambda: graphene.String)
+
+    # Legacy fields.
+    total_resource_slots = graphene.JSONString()
+    allowed_vfolder_hosts = graphene.List(lambda: graphene.String)
 
     @classmethod
     def from_row(cls, row):
@@ -119,8 +121,7 @@ class Group(graphene.ObjectType):
             created_at=row['created_at'],
             modified_at=row['modified_at'],
             domain_name=row['domain_name'],
-            total_resource_slots=row['total_resource_slots'].to_json(),
-            allowed_vfolder_hosts=row['allowed_vfolder_hosts'],
+            resource_policy=row['resource_policy'],
             integration_id=row['integration_id'],
         )
 
@@ -128,6 +129,24 @@ class Group(graphene.ObjectType):
         from .scaling_group import ScalingGroup
         sgroups = await ScalingGroup.load_by_group(info.context, self.id)
         return [sg.name for sg in sgroups]
+
+    async def resolve_total_resource_slots(self, info):
+        if self.resource_policy is None:
+            return {}
+        policy = await KeyPairResourcePolicy.load_by_name(info.context, self.resource_policy)
+        return policy.total_resource_slots
+
+    async def resolve_allowed_vfolder_hosts(self, info):
+        if self.resource_policy is None:
+            return {}
+        policy = await KeyPairResourcePolicy.load_by_name(info.context, self.resource_policy)
+        return policy.allowed_vfolder_hosts
+
+    async def resolve_allowed_docker_registries(self, info):
+        if self.resource_policy is None:
+            return {}
+        policy = await KeyPairResourcePolicy.load_by_name(info.context, self.resource_policy)
+        return policy.allowed_docker_registries
 
     @staticmethod
     async def load_all(context, *,
@@ -188,8 +207,7 @@ class GroupInput(graphene.InputObjectType):
     description = graphene.String(required=False)
     is_active = graphene.Boolean(required=False, default=True)
     domain_name = graphene.String(required=True)
-    total_resource_slots = graphene.JSONString(required=False)
-    allowed_vfolder_hosts = graphene.List(lambda: graphene.String, required=False)
+    resource_policy = graphene.String(required=False)
     integration_id = graphene.String(required=False)
 
 
@@ -198,8 +216,7 @@ class ModifyGroupInput(graphene.InputObjectType):
     description = graphene.String(required=False)
     is_active = graphene.Boolean(required=False)
     domain_name = graphene.String(required=False)
-    total_resource_slots = graphene.JSONString(required=False)
-    user_update_mode = graphene.String(required=False)
+    resource_policy = graphene.String(required=False)
     user_uuids = graphene.List(lambda: graphene.String, required=False)
     allowed_vfolder_hosts = graphene.List(lambda: graphene.String, required=False)
     integration_id = graphene.String(required=False)
@@ -228,9 +245,7 @@ class CreateGroup(graphene.Mutation):
                 'description': props.description,
                 'is_active': props.is_active,
                 'domain_name': props.domain_name,
-                'total_resource_slots': ResourceSlot.from_user_input(
-                    props.total_resource_slots, None),
-                'allowed_vfolder_hosts': props.allowed_vfolder_hosts,
+                'resource_policy': props.resource_policy,
                 'integration_id': props.integration_id,
             }
             query = (groups.insert().values(data))
@@ -274,9 +289,7 @@ class ModifyGroup(graphene.Mutation):
             set_if_set(props, data, 'description')
             set_if_set(props, data, 'is_active')
             set_if_set(props, data, 'domain_name')
-            set_if_set(props, data, 'total_resource_slots',
-                       clean_func=lambda v: ResourceSlot.from_user_input(v, None))
-            set_if_set(props, data, 'allowed_vfolder_hosts')
+            set_if_set(props, data, 'resource_policy')
             set_if_set(props, data, 'integration_id')
 
             if 'name' in data:

@@ -47,6 +47,7 @@ keypair_resource_policies = sa.Table(
     sa.Column('max_vfolder_size', sa.BigInteger(), nullable=False),
     sa.Column('idle_timeout', sa.BigInteger(), nullable=False),
     sa.Column('allowed_vfolder_hosts', pgsql.ARRAY(sa.String), nullable=False),
+    sa.Column('allowed_docker_registries', pgsql.ARRAY(sa.String), nullable=False, default='{}'),
     # TODO: implement with a many-to-many association table
     # sa.Column('allowed_scaling_groups', sa.Array(sa.String), nullable=False),
 )
@@ -63,6 +64,7 @@ class KeyPairResourcePolicy(graphene.ObjectType):
     max_vfolder_count = graphene.Int()
     max_vfolder_size = BigInt()
     allowed_vfolder_hosts = graphene.List(lambda: graphene.String)
+    allowed_docker_registries = graphene.List(lambda: graphene.String)
 
     @classmethod
     def from_row(cls, row):
@@ -79,6 +81,7 @@ class KeyPairResourcePolicy(graphene.ObjectType):
             max_vfolder_count=row['max_vfolder_count'],
             max_vfolder_size=row['max_vfolder_size'],
             allowed_vfolder_hosts=row['allowed_vfolder_hosts'],
+            allowed_docker_registries=row['allowed_docker_registries'],
         )
 
     @classmethod
@@ -173,6 +176,7 @@ class CreateKeyPairResourcePolicyInput(graphene.InputObjectType):
     max_vfolder_count = graphene.Int(required=True)
     max_vfolder_size = BigInt(required=True)
     allowed_vfolder_hosts = graphene.List(lambda: graphene.String)
+    allowed_docker_registries = graphene.List(lambda: graphene.String, required=False)
 
 
 class ModifyKeyPairResourcePolicyInput(graphene.InputObjectType):
@@ -184,6 +188,7 @@ class ModifyKeyPairResourcePolicyInput(graphene.InputObjectType):
     max_vfolder_count = graphene.Int(required=False)
     max_vfolder_size = BigInt(required=False)
     allowed_vfolder_hosts = graphene.List(lambda: graphene.String, required=False)
+    allowed_docker_registries = graphene.List(lambda: graphene.String, required=False)
 
 
 class CreateKeyPairResourcePolicy(graphene.Mutation):
@@ -211,6 +216,7 @@ class CreateKeyPairResourcePolicy(graphene.Mutation):
             'max_vfolder_count': props.max_vfolder_count,
             'max_vfolder_size': props.max_vfolder_size,
             'allowed_vfolder_hosts': props.allowed_vfolder_hosts,
+            'allowed_docker_registries': props.allowed_docker_registries,
         }
         insert_query = (keypair_resource_policies.insert().values(data))
         item_query = (
@@ -244,6 +250,7 @@ class ModifyKeyPairResourcePolicy(graphene.Mutation):
         set_if_set(props, data, 'max_vfolder_count')
         set_if_set(props, data, 'max_vfolder_size')
         set_if_set(props, data, 'allowed_vfolder_hosts')
+        set_if_set(props, data, 'allowed_docker_registries')
         update_query = (
             keypair_resource_policies.update()
             .values(data)
