@@ -30,7 +30,7 @@ import yarl
 
 from ai.backend.common import validators as tx
 from ai.backend.common.logging import BraceStyleAdapter
-from ai.backend.common.types import DefaultForUnspecified, ResourceSlot
+from ai.backend.common.types import ResourceSlot
 from .auth import auth_required, superadmin_required
 from .exceptions import (
     InvalidAPIParameters,
@@ -38,9 +38,8 @@ from .exceptions import (
 from .manager import READ_ALLOWED, server_status_required
 from ..manager.models import (
     agents, resource_presets,
-    domains, groups, kernels, keypairs, keypair_resource_policies, users,
+    groups, kernels, keypairs, users,
     AgentStatus,
-    association_groups_users,
     query_allowed_sgroups,
     RESOURCE_OCCUPYING_KERNEL_STATUSES,
     RESOURCE_USAGE_KERNEL_STATUSES,
@@ -95,7 +94,6 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
     '''
     try:
         access_key = request['keypair']['access_key']
-        keypair_resource_policy = request['keypair']['resource_policy']
         domain_name = request['user']['domain_name']
         # TODO: uncomment when we implement scaling group.
         # scaling_group = request.query.get('scaling_group')
@@ -116,69 +114,11 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
              request['keypair']['access_key'], params['group'], params['scaling_group'])
 
     async with request.app['dbpool'].acquire() as conn, conn.begin():
-        # Check keypair resource limit.
-        keypair_limits = ResourceSlot.from_policy(keypair_resource_policy, known_slot_types)
-        keypair_occupied = await registry.get_keypair_occupancy(access_key, conn=conn)
-        keypair_remaining = keypair_limits - keypair_occupied
-
-        # Check group resource limit and get group_id.
-        j = (groups
-             .join(association_groups_users,
-                   association_groups_users.c.group_id == groups.c.id)
-             .join(keypair_resource_policies,
-                   keypair_resource_policies.c.name == groups.c.resource_policy, isouter=True))
-        query = (sa.select([groups.c.id, keypair_resource_policies.c.total_resource_slots])
-                   .select_from(j)
-                   .where(
-                       (association_groups_users.c.user_id == request['user']['uuid']) &
-                       (groups.c.name == params['group']) &
-                       (domains.c.name == domain_name)))
-        result = await conn.execute(query)
-        row = await result.fetchone()
-        if row.id is None:
-            raise InvalidAPIParameters('Unknown user group')
-        if 'total_resource_slots' in row and row.total_resource_slots is not None:
-            group_resource_slots = row.total_resource_slots
-        else:
-            group_resource_slots = {}
-        group_id = row.id
-        group_resource_policy = {
-            'total_resource_slots': group_resource_slots,
-            'default_for_unspecified': DefaultForUnspecified.UNLIMITED
-        }
-        group_limits = ResourceSlot.from_policy(group_resource_policy, known_slot_types)
-        group_occupied = await registry.get_group_occupancy(group_id, conn=conn)
-        group_remaining = group_limits - group_occupied
-
-        # Check domain resource limit.
-        j = (domains
-             .join(keypair_resource_policies,
-                   keypair_resource_policies.c.name == domains.c.resource_policy, isouter=True))
-        query = (sa.select([keypair_resource_policies.c.total_resource_slots])
-                   .select_from(j)
-                   .where(domains.c.name == domain_name))
-        result = await conn.execute(query)
-        row = await result.fetchone()
-        if 'total_resource_slots' in row and row.total_resource_slots is not None:
-            domain_resource_slots = row.total_resource_slots
-        else:
-            domain_resource_slots = {}
-        domain_resource_policy = {
-            'total_resource_slots': domain_resource_slots,
-            'default_for_unspecified': DefaultForUnspecified.UNLIMITED
-        }
-        domain_limits = ResourceSlot.from_policy(domain_resource_policy, known_slot_types)
-        domain_occupied = await registry.get_domain_occupancy(domain_name, conn=conn)
-        domain_remaining = domain_limits - domain_occupied
-
-        # Take minimum remaining resources. There's no need to merge limits and occupied.
+        from ai.backend.manager.models.resource_policy import get_unified_resource_slots
+        rslots = await get_unified_resource_slots(request, params, db_conn=conn)
+        group_id = rslots['group_id']
         # To keep legacy, we just merge all remaining slots into `keypair_remainig`.
-        for slot in known_slot_types:
-            keypair_remaining[slot] = min(
-                keypair_remaining[slot],
-                group_remaining[slot],
-                domain_remaining[slot],
-            )
+        keypair_remaining = rslots['unified_remaining']
 
         # Prepare per scaling group resource.
         sgroups = await query_allowed_sgroups(conn, domain_name, group_id, access_key)
@@ -235,9 +175,8 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
             sgroup_remaining[slot] = min(keypair_remaining[slot], sgroup_remaining[slot])
 
         # Fetch all resource presets in the current scaling group.
-        query = (
-            sa.select([resource_presets])
-            .select_from(resource_presets))
+        query = (sa.select([resource_presets])
+                   .select_from(resource_presets))
         async for row in conn.execute(query):
             # Check if there are any agent that can allocate each preset.
             allocatable = False
@@ -256,16 +195,16 @@ async def check_presets(request: web.Request, params: Any) -> web.Response:
         allow_group_total = \
             await request.app['registry'].config_server.get('config/api/resources/allow-group-total')
         if allow_group_total != '':
-            group_limits = ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()})
-            group_occupied = ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()})
-            group_remaining = ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()})
+            rslots['group_limits'] = ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()})
+            rslots['group_occupied'] = ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()})
+            rslots['group_remaining'] = ResourceSlot({k: Decimal(0) for k in known_slot_types.keys()})
 
-        resp['keypair_limits'] = keypair_limits.to_json()
-        resp['keypair_using'] = keypair_occupied.to_json()
+        resp['keypair_limits'] = rslots['keypair_limits'].to_json()
+        resp['keypair_using'] = rslots['keypair_occupied'].to_json()
         resp['keypair_remaining'] = keypair_remaining.to_json()
-        resp['group_limits'] = group_limits.to_json()
-        resp['group_using'] = group_occupied.to_json()
-        resp['group_remaining'] = group_remaining.to_json()
+        resp['group_limits'] = rslots['group_limits'].to_json()
+        resp['group_using'] = rslots['group_occupied'].to_json()
+        resp['group_remaining'] = rslots['group_remaining'].to_json()
         resp['scaling_group_remaining'] = sgroup_remaining.to_json()
         resp['scaling_groups'] = per_sgroup
     return web.json_response(resp, status=200)

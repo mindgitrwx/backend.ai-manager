@@ -5,11 +5,9 @@ from typing import Sequence
 import graphene
 from graphene.types.datetime import DateTime as GQLDateTime
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql as pgsql
 
-from ai.backend.common.types import ResourceSlot
 from .base import (
-    metadata, ResourceSlotColumn,
+    metadata,
     privileged_mutation,
     simple_db_mutate,
     simple_db_mutate_returning_item,

@@ -1,14 +1,18 @@
 from collections import OrderedDict
 import logging
-from typing import Sequence
+from typing import Any, Sequence
 
+from aiohttp import web
+from aiopg.sa.connection import SAConnection
 import graphene
 from graphene.types.datetime import DateTime as GQLDateTime
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql as pgsql
+import trafaret as t
 
 from ai.backend.common.logging import BraceStyleAdapter
 from ai.backend.common.types import DefaultForUnspecified, ResourceSlot
+from ai.backend.gateway.exceptions import InvalidAPIParameters
 from .base import (
     metadata, BigInt, EnumType, ResourceSlotColumn,
     privileged_mutation,
@@ -274,3 +278,110 @@ class DeleteKeyPairResourcePolicy(graphene.Mutation):
             .where(keypair_resource_policies.c.name == name)
         )
         return await simple_db_mutate(cls, info.context, delete_query)
+
+
+async def get_unified_resource_slots(request: web.Request, params: Any, db_conn: SAConnection = None):
+    '''
+    Calculate unified total_resource_slots for a request and calculates resource limits,
+    occupied, and remaining. Currently, domain-/group-/keypair-level resource policies are
+    considered.
+    '''
+    params_checker = t.Dict({
+        t.Key('group', default='default'): t.String,
+    }).allow_extra('*')
+    params_checker.check(params)
+
+    from ai.backend.manager.models import (
+        association_groups_users, domains, groups, keypair_resource_policies,
+    )
+
+    registry = request.app['registry']
+    known_slot_types = await registry.config_server.get_resource_slots()
+    domain_name = request['user']['domain_name']
+    access_key = request['keypair']['access_key']
+    keypair_resource_policy = request['keypair']['resource_policy']
+
+    async def _calculate_slots(conn):
+        # Check keypair resource limit.
+        keypair_limits = ResourceSlot.from_policy(keypair_resource_policy, known_slot_types)
+        keypair_occupied = await registry.get_keypair_occupancy(access_key, conn=conn)
+        keypair_remaining = keypair_limits - keypair_occupied
+
+        # Check group resource limit and get group_id.
+        j = (groups
+             .join(association_groups_users,
+                   association_groups_users.c.group_id == groups.c.id)
+             .join(keypair_resource_policies,
+                   keypair_resource_policies.c.name == groups.c.resource_policy, isouter=True))
+        query = (sa.select([groups.c.id, keypair_resource_policies.c.total_resource_slots])
+                   .select_from(j)
+                   .where(
+                       (association_groups_users.c.user_id == request['user']['uuid']) &
+                       (groups.c.name == params['group']) &
+                       (domains.c.name == domain_name)))
+        result = await conn.execute(query)
+        row = await result.fetchone()
+        if row.id is None:
+            raise InvalidAPIParameters('Unknown user group')
+        if 'total_resource_slots' in row and row.total_resource_slots is not None:
+            group_resource_slots = row.total_resource_slots
+        else:
+            group_resource_slots = {}
+        group_id = row.id
+        group_resource_policy = {
+            'total_resource_slots': group_resource_slots,
+            'default_for_unspecified': DefaultForUnspecified.UNLIMITED
+        }
+        group_limits = ResourceSlot.from_policy(group_resource_policy, known_slot_types)
+        group_occupied = await registry.get_group_occupancy(group_id, conn=conn)
+        group_remaining = group_limits - group_occupied
+
+        # Check domain resource limit.
+        j = (domains
+             .join(keypair_resource_policies,
+                   keypair_resource_policies.c.name == domains.c.resource_policy, isouter=True))
+        query = (sa.select([keypair_resource_policies.c.total_resource_slots])
+                   .select_from(j)
+                   .where(domains.c.name == domain_name))
+        result = await conn.execute(query)
+        row = await result.fetchone()
+        if 'total_resource_slots' in row and row.total_resource_slots is not None:
+            domain_resource_slots = row.total_resource_slots
+        else:
+            domain_resource_slots = {}
+        domain_resource_policy = {
+            'total_resource_slots': domain_resource_slots,
+            'default_for_unspecified': DefaultForUnspecified.UNLIMITED
+        }
+        domain_limits = ResourceSlot.from_policy(domain_resource_policy, known_slot_types)
+        domain_occupied = await registry.get_domain_occupancy(domain_name, conn=conn)
+        domain_remaining = domain_limits - domain_occupied
+
+        # Take minimum remaining resources. There's no need to merge limits and occupied.
+        unified_remaining = keypair_remaining
+        for slot in known_slot_types:
+            unified_remaining[slot] = min(
+                keypair_remaining[slot],
+                group_remaining[slot],
+                domain_remaining[slot],
+            )
+
+        return {
+            'keypair_limits': keypair_limits,
+            'keypair_occupied': keypair_occupied,
+            'keypair_remaining': keypair_remaining,
+            'group_limits': group_limits,
+            'group_occupied': group_occupied,
+            'group_remaining': group_remaining,
+            'domain_limits': domain_limits,
+            'domain_occupied': domain_occupied,
+            'domain_remaining': domain_remaining,
+            'unified_remaining': unified_remaining,
+            'group_id': group_id,
+        }
+
+    if db_conn is not None:
+        return await _calculate_slots(db_conn)
+    else:
+        async with request.app['dbpool'].acquire() as conn, conn.begin():
+            return await _calculate_slots(conn)

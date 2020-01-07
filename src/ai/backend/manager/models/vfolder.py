@@ -354,8 +354,8 @@ async def get_allowed_vfolder_hosts_by_user(conn, resource_policy,
         allowed_hosts.update(host)
     # User's Groups' allowed_vfolder_hosts.
     j = (groups.join(association_groups_users,
-                    ((groups.c.id == association_groups_users.c.group_id) &
-                     (association_groups_users.c.user_id == user_uuid)))
+                     ((groups.c.id == association_groups_users.c.group_id) &
+                      (association_groups_users.c.user_id == user_uuid)))
                .join(keypair_resource_policies,
                      (groups.c.resource_policy == keypair_resource_policies.c.name)))
     query = (sa.select([keypair_resource_policies.c.allowed_vfolder_hosts])

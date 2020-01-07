@@ -12,14 +12,13 @@ import graphene
 from graphene.types.datetime import DateTime as GQLDateTime
 import psycopg2 as pg
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql as pgsql
 
-from ai.backend.common.types import ResourceSlot
 from .base import (
-    metadata, GUID, IDColumn, ResourceSlotColumn,
+    metadata, GUID, IDColumn,
     privileged_mutation,
     set_if_set,
 )
+from .resource_policy import KeyPairResourcePolicy
 from .user import UserRole
 
 
