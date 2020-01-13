@@ -131,21 +131,24 @@ class Group(graphene.ObjectType):
 
     async def resolve_total_resource_slots(self, info):
         if self.resource_policy is None:
-            return {}
-        policy = await KeyPairResourcePolicy.load_by_name(info.context, self.resource_policy)
-        return policy.total_resource_slots
+            return []
+        policies = await KeyPairResourcePolicy.batch_load_by_name(info.context, [self.resource_policy])
+        slots = policies[0].total_resource_slots if policies and len(policies) > 0 else {}
+        return slots
 
     async def resolve_allowed_vfolder_hosts(self, info):
         if self.resource_policy is None:
-            return {}
-        policy = await KeyPairResourcePolicy.load_by_name(info.context, self.resource_policy)
-        return policy.allowed_vfolder_hosts
+            return []
+        policies = await KeyPairResourcePolicy.batch_load_by_name(info.context, [self.resource_policy])
+        hosts = policies[0].allowed_vfolder_hosts if policies and len(policies) > 0 else []
+        return hosts
 
     async def resolve_allowed_docker_registries(self, info):
         if self.resource_policy is None:
-            return {}
-        policy = await KeyPairResourcePolicy.load_by_name(info.context, self.resource_policy)
-        return policy.allowed_docker_registries
+            return []
+        policies = await KeyPairResourcePolicy.batch_load_by_name(info.context, [self.resource_policy])
+        registries = policies[0].allowed_docker_registries if policies and len(policies) > 0 else []
+        return registries
 
     @staticmethod
     async def load_all(context, *,
