@@ -2,7 +2,7 @@ import asyncio
 import base64
 from collections import OrderedDict
 import secrets
-from typing import Sequence, List, Tuple
+from typing import Sequence, List, TypedDict, Tuple
 
 from cryptography.hazmat.primitives import serialization as crypto_serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.sql.expression import false
 import psycopg2 as pg
 
+from ai.backend.gateway.config import RESERVED_DOTFILES
 from ai.backend.common import msgpack
 
 from .base import (
@@ -25,8 +26,9 @@ __all__: Sequence[str] = (
     'keypairs',
     'KeyPair', 'KeyPairInput',
     'CreateKeyPair', 'ModifyKeyPair', 'DeleteKeyPair',
-    'MAXIMUM_DOTFILE_SIZE',
-    'query_owned_dotfiles'
+    'Dotfile', 'MAXIMUM_DOTFILE_SIZE',
+    'query_owned_dotfiles',
+    'verify_dotfile_name'
 )
 
 
@@ -317,6 +319,12 @@ class DeleteKeyPair(graphene.Mutation):
         return await simple_db_mutate(cls, info.context, delete_query)
 
 
+class Dotfile(TypedDict):
+    data: str
+    path: str
+    perm: str
+
+
 def generate_keypair():
     '''
     AWS-like access key and secret key generation.
@@ -347,7 +355,7 @@ def generate_ssh_keypair():
     return (public_key, private_key)
 
 
-async def query_owned_dotfiles(conn, access_key) -> Tuple[List[dict], int]:
+async def query_owned_dotfiles(conn, access_key) -> Tuple[List[Dotfile], int]:
     query = (sa.select([keypairs.c.dotfiles])
                .select_from(keypairs)
                .where(keypairs.c.access_key == access_key))
@@ -363,3 +371,9 @@ async def query_bootstrap_script(conn, access_key) -> Tuple[List[dict], int]:
     packed_script = await conn.scalar(query)
     script = msgpack.unpackb(packed_script)
     return script, MAXIMUM_DOTFILE_SIZE - len(packed_script)
+
+
+def verify_dotfile_name(dotfile: str) -> bool:
+    if dotfile in RESERVED_DOTFILES:
+        return False
+    return True

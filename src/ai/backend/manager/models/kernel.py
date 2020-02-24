@@ -101,8 +101,10 @@ kernels = sa.Table(
     sa.Column('occupied_shares', pgsql.JSONB(), nullable=False, default={}),  # legacy
     sa.Column('environ', sa.ARRAY(sa.String), nullable=True),
     sa.Column('mounts', sa.ARRAY(sa.String), nullable=True),  # list of list
+    sa.Column('mount_map', pgsql.JSONB(), nullable=True, default={}),
     sa.Column('attached_devices', pgsql.JSONB(), nullable=True, default={}),
     sa.Column('resource_opts', pgsql.JSONB(), nullable=True, default={}),
+    sa.Column('bootstrap_script', sa.String(length=16 * 1024), nullable=True),
 
     # Port mappings
     # If kernel_host is NULL, it is assumed to be same to the agent host or IP.
@@ -112,6 +114,7 @@ kernels = sa.Table(
     sa.Column('stdin_port', sa.Integer(), nullable=False),   # legacy for stream_pty
     sa.Column('stdout_port', sa.Integer(), nullable=False),  # legacy for stream_pty
     sa.Column('service_ports', pgsql.JSONB(), nullable=True),
+    sa.Column('preopen_ports', sa.ARRAY(sa.Integer), nullable=True),
 
     # Lifecycle
     sa.Column('created_at', sa.DateTime(timezone=True),
@@ -155,8 +158,10 @@ kernel_dependencies = sa.Table(
 
 
 class SessionCommons:
-    sess_id = graphene.String()
-    sess_type = graphene.String()
+    sess_id = graphene.String()    # legacy
+    sess_type = graphene.String()  # legacy
+    session_name = graphene.String()
+    session_type = graphene.String()
     id = graphene.ID()
     role = graphene.String()
     image = graphene.String()
@@ -289,9 +294,11 @@ class SessionCommons:
         else:
             hide_agents = context['config']['manager']['hide-agents']
         return {
-            'sess_id': row['sess_id'],
-            'sess_type': row['sess_type'].name,
-            'id': row['id'],
+            'sess_id': row['sess_id'],           # legacy, will be deprecated
+            'sess_type': row['sess_type'].name,  # legacy, will be deprecated
+            'session_name': row['sess_id'],
+            'session_type': row['sess_type'].name,
+            'id': row['id'],                     # legacy, will be replaced with session UUID
             'role': row['role'],
             'image': row['image'],
             'registry': row['registry'],
@@ -310,11 +317,10 @@ class SessionCommons:
             'result': row['result'].name,
             'service_ports': row['service_ports'],
             'occupied_slots': row['occupied_slots'].to_json(),
-            'occupied_shares': row['occupied_shares'],
             'mounts': row['mounts'],
             'resource_opts': row['resource_opts'],
             'num_queries': row['num_queries'],
-            # optinally hidden
+            # optionally hidden
             'agent': row['agent'] if not hide_agents else None,
             'container_id': row['container_id'] if not hide_agents else None,
             # live_stat is resolved by Graphene
@@ -332,6 +338,7 @@ class SessionCommons:
             'io_max_scratch_size': 0,
             'io_cur_scratch_size': 0,
             'lang': row['image'],
+            'occupied_shares': row['occupied_shares'],
             'mem_slot': BinarySize.from_str(
                 row['occupied_slots'].get('mem', 0)) // mega,
             'cpu_slot': float(row['occupied_slots'].get('cpu', 0)),

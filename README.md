@@ -78,7 +78,7 @@ $ cd manager
 $ pyenv virtualenv venv-manager
 $ pyenv local venv-manager
 $ pip install -U pip setuptools
-$ pip install -U -r requirements-dev.txt
+$ pip install -U -r requirements/dev.txt
 ```
 
 From now on, let's assume all shell commands are executed inside the virtualenv.
@@ -254,3 +254,10 @@ configurations.  You can of course change those port numbers and ranges in the c
 | 6001                       | ZeroMQ-based RPC calls from managers to agents |
 | 6009                       | HTTP watcher API |
 | 30000-31000                | Port pool for in-container services |
+
+
+LICENSES
+--------
+
+[GNU Lesser General Public License](https://github.com/lablup/backend.ai-manager/blob/master/LICENSE)
+[Dependencies](https://github.com/lablup/backend.ai-manager/blob/master/DEPENDENCIES.md)

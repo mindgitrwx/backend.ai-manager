@@ -1,7 +1,50 @@
 Changes
 =======
 
-19.09.11 (2020-01-17)
+19.12.0b1 (2020-01-xx)
+----------------------
+
+* IMPROVE: Now our manager-to-agent RPC uses `Callosum <https://github.com/lablup/callosum>_` instead of
+  aiozmq, supporting Python 3.8 natively. (#209, #79)
+
+* Internally refactored the main function for easier writing of future unit tests by composing different
+  resource cleanup contexts in a modular way.
+
+19.12.0a2 (2019-12-31)
+----------------------
+
+* NEW: User-manageable session templates written in YAML to reuse session creation parameters. (#213)
+
+* NEW: User-customizable per-scaling-group session queue scheduler plugins and three intrinsic plugins:
+  FIFO, LIFO, and the DRF (dominant resource fairness) scheduler. (#212)
+
+19.12.0a1 (2019-12-26)
+----------------------
+
+* MAINTENANCE: Now it runs on Python 3.8 or higher.
+
+* IMPROVE: ResourceSlots are now more permissive so that agents with different sets of
+  accelerator plugins can now coexist in a single cluster. (#214)
+
+* NEW: more convenient etcd commands: ``quote``, ``unquote``, ``move-subtree``
+
+* IMPROVE: "--short" and "--installed" options added to ``etcd list-images`` command.
+
+19.09.13 (2020-02-10)
+---------------------
+
+* NEW: Include the agent IDs where each image is installed when fetching the image list (#222)
+
+* NEW: API for managing user-specific dotfiles, which are automatically populated for all new sessions.
+  (#220)
+
+* FIX: Missing error logging for InternalServerError raised by service-port streaming API handler
+
+* FIX: Make the tus.io upload handler to use asynchronous file I/O (#228, lablup/backend.ai#106)
+
+* MAINTENANCE: Improve internal CI/CD pipelines (#225)
+
+19.09.12 (2020-01-17)
 ---------------------
 
 * FIX: Potential exhaustion of DB connection pool due to long file I/O operations in the vfolder API

@@ -2,15 +2,16 @@ language: python
 dist: xenial
 cache: pip
 addons:
-  postgresql: "9.6"
+  postgresql: "10"
+  apt:
+    packages:
+    - postgresql-10
+    - postgresql-client-10
+    - libsnappy-dev
 services:
   - docker
   - postgresql
   - redis
-addons:
-  apt:
-    packages:
-    - libsnappy-dev
 
 # stage decl.
 stages:
@@ -22,7 +23,7 @@ stages:
 os:
   - linux
 python:
-  - "3.6"
+  - "3.8"
 
 install:
   - pip install -U pip setuptools
@@ -35,11 +36,13 @@ install:
     fi
   - pip install -U -r requirements/test.txt
   - mkdir -p ~/.config/backend.ai
-  - psql -c 'create database testing;' -U postgres
   - cp config/ci.toml ~/.config/backend.ai/manager.toml
   - mkdir -p /tmp/scratches
   - mkdir -p /tmp/vfroot/local
 before_script:
+  # db setup
+  - psql -c "CREATE DATABASE testing;" -U postgres
+  - psql -c "CREATE USER lablup WITH PASSWORD 'develove'; ALTER USER lablup WITH SUPERUSER;" -U postgres
   # etcd
   - mkdir -p /tmp/etcd
   - docker run -d -p 2379:2379 -p 2380:2380
@@ -57,26 +60,20 @@ before_script:
      --initial-cluster-token backendai-etcd-token
      --initial-cluster-state new
      --auto-compaction-retention 1
-  - docker exec -it backendai-etcd etcdctl put /sorna/testing/config/docker/registry/index.docker.io "https://registry-1.docker.io"
-  - docker exec -it backendai-etcd etcdctl put /sorna/testing/config/docker/registry/index.docker.io/username "lablup"
-  - docker exec -it backendai-etcd etcdctl put /sorna/testing/config/redis/addr "127.0.0.1:6379"
-  - docker exec -it backendai-etcd etcdctl put /sorna/testing/volumes/_mount "/tmp/vfroot"
-  - docker exec -it backendai-etcd etcdctl put /sorna/testing/volumes/_default_host "local"
-  # set capabilities to python binary
-  - sudo setcap cap_sys_ptrace,cap_sys_admin,cap_dac_override+eip $(readlink -f $(which python))
   # pull minimal kernel images
   - docker pull lablup/lua:5.3-alpine3.8
 script:
   - python -m pytest -m 'not integration' -v --cov=src
-after_success:
+after_script:
   - codecov
 
 # stage def.
 jobs:
   include:
     - stage: test
+      python: "3.8"
     - stage: deploy
-      python: "3.6"
+      python: "3.8"
       install: skip
       script: skip
       deploy:

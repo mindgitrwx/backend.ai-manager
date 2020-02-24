@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any
+from typing import Any, Tuple
 
 from aiohttp import web
 import aiohttp_cors
@@ -15,26 +15,17 @@ from .exceptions import (
     DotfileNotFound, DotfileAlreadyExists
 )
 from .manager import READ_ALLOWED, server_status_required
+from .typing import CORSOptions, Iterable, WebMiddleware
 from .utils import check_api_params, get_access_key_scopes
 
 from ..manager.models import (
-    keypairs
+    keypairs, verify_dotfile_name
 )
 from ..manager.models.keypair import (
     query_bootstrap_script, query_owned_dotfiles, MAXIMUM_DOTFILE_SIZE
 )
 
 log = BraceStyleAdapter(logging.getLogger('ai.backend.gateway.dotfile'))
-
-
-def validate_path(path: str) -> bool:
-    reserved_words = [r'^\.local$', r'^\.local\/', r'^\.ssh/authorized_keys$']
-    if not path.startswith('.'):
-        return False
-    for regex_reserved in [re.compile(x) for x in reserved_words]:
-        if regex_reserved.match(path):
-            return False
-    return True
 
 
 @server_status_required(READ_ALLOWED)
@@ -60,8 +51,8 @@ async def create(request: web.Request, params: Any) -> web.Response:
             raise DotfileCreationFailed('No leftover space for dotfile storage')
         if len(dotfiles) == 100:
             raise DotfileCreationFailed('Dotfile creation limit reached')
-        if not validate_path(path):
-            raise InvalidAPIParameters(path)
+        if not verify_dotfile_name(path):
+            raise InvalidAPIParameters(f'Dotfile {path} is reserved for internal operations.')
         duplicate = [x for x in dotfiles if x['path'] == path]
         if len(duplicate) > 0:
             raise DotfileAlreadyExists
@@ -213,7 +204,7 @@ async def shutdown(app: web.Application) -> None:
     pass
 
 
-def create_app(default_cors_options):
+def create_app(default_cors_options: CORSOptions) -> Tuple[web.Application, Iterable[WebMiddleware]]:
     app = web.Application()
     app.on_startup.append(init)
     app.on_shutdown.append(shutdown)

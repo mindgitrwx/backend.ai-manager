@@ -1,10 +1,11 @@
 import os
+import re
 import secrets
 import sys
 from pathlib import Path
 from pprint import pformat
 from typing import (
-    Any,
+    Any, Final,
     Mapping,
 )
 
@@ -16,8 +17,12 @@ from ai.backend.common.etcd import AsyncEtcd
 _max_cpu_count = os.cpu_count()
 _file_perm = (Path(__file__).parent / 'server.py').stat()
 
-DEFAULT_CHUNK_SIZE = 256 * 1024  # 256 KiB
-DEFAULT_INFLIGHT_CHUNKS = 8
+DEFAULT_CHUNK_SIZE: Final = 256 * 1024  # 256 KiB
+DEFAULT_INFLIGHT_CHUNKS: Final = 8
+_RESERVED_VFOLDER_PATTERNS = [r'^\.[a-z0-9]+rc$', r'^\.[a-z0-9]+_profile$']
+RESERVED_DOTFILES = ['.terminfo', '.jupyter', '.ssh', '.ssh/authorized_keys', '.local', '.config']
+RESERVED_VFOLDERS = ['.terminfo', '.jupyter', '.tmux.conf', '.ssh']
+RESERVED_VFOLDER_PATTERNS = [re.compile(x) for x in _RESERVED_VFOLDER_PATTERNS]
 
 manager_config_iv = t.Dict({
     t.Key('db'): t.Dict({
@@ -34,7 +39,7 @@ manager_config_iv = t.Dict({
         t.Key('service-addr', default=('0.0.0.0', 8080)): tx.HostPortPair,
         t.Key('heartbeat-timeout', default=5.0): t.Float[1.0:],  # type: ignore
         t.Key('secret', default=None): t.Null | t.String,
-        t.Key('ssl-enabled', default=False): t.Bool | t.StrBool,
+        t.Key('ssl-enabled', default=False): t.ToBool,
         t.Key('ssl-cert', default=None): t.Null | tx.Path(type='file'),
         t.Key('ssl-privkey', default=None): t.Null | tx.Path(type='file'),
         t.Key('event-loop', default='asyncio'): t.Enum('asyncio', 'uvloop'),
@@ -45,13 +50,13 @@ manager_config_iv = t.Dict({
         t.Key('importer-image', default='lablup/importer:manylinux2010'): t.String,
     }).allow_extra('*'),
     t.Key('docker-registry'): t.Dict({
-        t.Key('ssl-verify', default=True): t.Bool | t.StrBool,
+        t.Key('ssl-verify', default=True): t.ToBool,
     }).allow_extra('*'),
     t.Key('logging'): t.Any,  # checked in ai.backend.common.logging
     t.Key('debug'): t.Dict({
-        t.Key('enabled', default=False): t.Bool | t.StrBool,
-        t.Key('log-events', default=False): t.Bool | t.StrBool,
-        t.Key('log-scheduler-ticks', default=False): t.Bool | t.StrBool,
+        t.Key('enabled', default=False): t.ToBool,
+        t.Key('log-events', default=False): t.ToBool,
+        t.Key('log-scheduler-ticks', default=False): t.ToBool,
     }).allow_extra('*'),
 }).merge(config.etcd_config_iv).allow_extra('*')
 
@@ -77,6 +82,10 @@ _shdefs: Mapping[str, Any] = {
             'container': '0.0.0.0/0',
         },
     },
+    'plugins': {
+        'accelerator': {},
+        'scheduler': {},
+    },
     'watcher': {
         'token': None,
     }
@@ -93,7 +102,12 @@ shared_config_iv = t.Dict({
         t.Key('addr', default=_shdefs['redis']['addr']): tx.HostPortPair,
         t.Key('password', default=_shdefs['redis']['password']): t.Null | t.String,
     }).allow_extra('*'),
-    t.Key('plugins', default={}): t.Mapping(t.String, t.Mapping(t.String, t.Any)),
+    t.Key('plugins', default=_shdefs['plugins']): t.Dict({
+        t.Key('accelerator', default=_shdefs['plugins']['accelerator']):
+            t.Mapping(t.String, t.Mapping(t.String, t.Any)),
+        t.Key('scheduler', default=_shdefs['plugins']['scheduler']):
+            t.Mapping(t.String, t.Mapping(t.String, t.Any)),
+    }).allow_extra('*'),
     t.Key('network', default=_shdefs['network']): t.Dict({
         t.Key('subnet', default=_shdefs['network']['subnet']): t.Dict({
             t.Key('agent', default=_shdefs['network']['subnet']['agent']): tx.IPNetwork,
@@ -106,7 +120,7 @@ shared_config_iv = t.Dict({
 }).allow_extra('*')
 
 
-def load(config_path: Path = None, debug: bool = False):
+def load(config_path: Path = None, debug: bool = False) -> Mapping[str, Any]:
 
     # Determine where to read configuration.
     raw_cfg, cfg_src_path = config.read_from_file(config_path, 'manager')
@@ -144,7 +158,7 @@ def load(config_path: Path = None, debug: bool = False):
     # (allow_extra will make configs to be forward-copmatible)
     try:
         cfg = config.check(raw_cfg, manager_config_iv)
-        if 'debug'in cfg and cfg['debug']['enabled']:
+        if 'debug' in cfg and cfg['debug']['enabled']:
             print('== Manager configuration ==', file=sys.stderr)
             print(pformat(cfg), file=sys.stderr)
         cfg['_src'] = cfg_src_path
@@ -158,7 +172,7 @@ def load(config_path: Path = None, debug: bool = False):
         return cfg
 
 
-async def load_shared(etcd: AsyncEtcd):
+async def load_shared(etcd: AsyncEtcd) -> Mapping[str, Any]:
     raw_cfg = await etcd.get_prefix('config')
     try:
         cfg = shared_config_iv.check(raw_cfg)

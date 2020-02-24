@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 '''
 Configuration Schema on etcd
 ----------------------------
@@ -45,6 +47,8 @@ Alias keys are also URL-quoted in the same way.
        + resources
          - allow-group-total: ""  # return total group resource limits in check-presets
      + docker
+       + image
+         - auto_pull: "digest" (default) | "tag" | "none"
        + registry
          + "index.docker.io": "https://registry-1.docker.io"
            - username: "lablup"
@@ -63,8 +67,14 @@ Alias keys are also URL-quoted in the same way.
        - {"cuda.smp"}: {"count"}
        ...
      + plugins
-       + "cuda"
-         - allocation_mode: "discrete"
+       + accelerator
+         + "cuda"
+           - allocation_mode: "discrete"
+           ...
+       + scheduler
+         + "fifo"
+         + "lifo"
+         + "drf"
          ...
      + network
        + subnet
@@ -107,14 +117,16 @@ Alias keys are also URL-quoted in the same way.
      ...
    ...
  + nodes
-   + manager: {instance-id}
-     - status: {one-of-ManagerStatus-value}
+   + manager
+     - {instance-id}: "up"
+     ...
    + redis: {"tcp://redis:6379"}
      - password: {redis-auth-password}
    + agents
      + {instance-id}: {"starting","running"}  # ConfigScopes.NODE
        - ip: {"127.0.0.1"}
        - watcher_port: {"6009"}
+     ...
  + sgroup
    + {name}  # ConfigScopes.SGROUP
      - swarm-manager/token
@@ -127,12 +139,19 @@ Alias keys are also URL-quoted in the same way.
 '''
 
 import asyncio
+from contextvars import ContextVar
 from collections import defaultdict
 from decimal import Decimal
 import logging
 import json
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union, Tuple
+from typing import (
+    Any, Optional, Union,
+    AsyncGenerator,
+    Iterable,
+    Mapping, DefaultDict,
+    Sequence, List, Tuple,
+)
 
 import aiohttp
 from aiohttp import web
@@ -150,7 +169,12 @@ from ai.backend.common.docker import (
     MIN_KERNELSPEC, MAX_KERNELSPEC,
 )
 from ai.backend.common.logging import BraceStyleAdapter
-from ai.backend.common.types import BinarySize, ResourceSlot
+from ai.backend.common.types import (
+    BinarySize, ResourceSlot,
+    SlotName, SlotTypes,
+    HostPortPair,
+    current_resource_slots,
+)
 from ai.backend.common.exception import UnknownImageReference
 from ai.backend.common.etcd import (
     quote as etcd_quote,
@@ -161,8 +185,10 @@ from ai.backend.common.docker import (
     login as registry_login,
 )
 from .auth import superadmin_required
+from ..manager.defs import INTRINSIC_SLOTS
 from .exceptions import InvalidAPIParameters, ServerMisconfiguredError
 from .manager import ManagerStatus
+from .typing import CORSOptions, WebMiddleware
 from .utils import chunked, check_api_params
 
 log = BraceStyleAdapter(logging.getLogger('ai.backend.gateway.etcd'))
@@ -172,12 +198,19 @@ config_defaults = {
     'volumes/_default_host': 'local',
     'volumes/_fsprefix': '/',
     'config/api/allow-origins': '*',
+    'config/docker/image/auto_pull': 'digest',
 }
+
+current_vfolder_types: ContextVar[List[str]] = ContextVar('current_vfolder_types')
 
 
 class ConfigServer:
 
-    def __init__(self, app_ctx, etcd_addr, etcd_user, etcd_password, namespace):
+    def __init__(self, app_ctx: Mapping[str, Any],
+                 etcd_addr: HostPortPair,
+                 etcd_user: Optional[str],
+                 etcd_password: Optional[str],
+                 namespace: str) -> None:
         # WARNING: importing etcd3/grpc must be done after forks.
         from ai.backend.common.etcd import AsyncEtcd
         self.context = app_ctx
@@ -193,7 +226,10 @@ class ConfigServer:
         }
         self.etcd = AsyncEtcd(etcd_addr, namespace, scope_prefix_map, credentials=credentials)
 
-    async def get(self, key, allow_null=True):
+    async def close(self) -> None:
+        await self.etcd.close()
+
+    async def get(self, key: str, allow_null: bool = True) -> Optional[str]:
         value = await self.etcd.get(key)
         if value is None:
             value = config_defaults.get(key, None)
@@ -202,17 +238,18 @@ class ConfigServer:
                 'A required etcd config is missing.', key)
         return value
 
-    async def register_myself(self, app_config):
+    async def register_myself(self) -> None:
         instance_id = await get_instance_id()
         manager_info = {
-            'nodes/manager': instance_id,
+            f'nodes/manager/{instance_id}': 'up',
         }
         await self.etcd.put_dict(manager_info)
 
-    async def deregister_myself(self):
-        await self.etcd.delete_prefix('nodes/manager')
+    async def deregister_myself(self) -> None:
+        instance_id = await get_instance_id()
+        await self.etcd.delete_prefix(f'nodes/manager/{instance_id}')
 
-    async def update_aliases_from_file(self, file: Path):
+    async def update_aliases_from_file(self, file: Path) -> None:
         log.info('Updating image aliases from "{0}"', file)
         try:
             data = yaml.load(open(file, 'r', encoding='utf-8'))
@@ -226,12 +263,12 @@ class ConfigServer:
             print(f'{alias} -> {target}')
         log.info('Done.')
 
-    async def _scan_reverse_aliases(self):
+    async def _scan_reverse_aliases(self) -> Mapping[str, List[str]]:
         aliases = await self.etcd.get_prefix('images/_aliases')
-        result = defaultdict(list)
+        result: DefaultDict[str, List[str]] = defaultdict(list)
         for key, value in aliases.items():
             result[value].append(etcd_unquote(key))
-        return result
+        return dict(result)
 
     async def _parse_image(self, image_ref, item, reverse_aliases):
         installed = (
@@ -282,7 +319,7 @@ class ConfigServer:
             raise UnknownImageReference(reference)
         return ref
 
-    async def inspect_image(self, reference: Union[str, ImageRef]):
+    async def inspect_image(self, reference: Union[str, ImageRef]) -> Mapping[str, Any]:
         if isinstance(reference, str):
             ref = await ImageRef.resolve_alias(reference, self.etcd)
         else:
@@ -293,7 +330,14 @@ class ConfigServer:
             raise UnknownImageReference(reference)
         return await self._parse_image(ref, image_info, reverse_aliases)
 
-    async def list_images(self):
+    async def forget_image(self, reference: Union[str, ImageRef]) -> None:
+        if isinstance(reference, str):
+            ref = await ImageRef.resolve_alias(reference, self.etcd)
+        else:
+            ref = reference
+        await self.etcd.delete_prefix(ref.tag_path)
+
+    async def list_images(self) -> Sequence[Mapping[str, Any]]:
         known_registries = await get_known_registries(self.etcd)
         reverse_aliases = await self._scan_reverse_aliases()
         data = await self.etcd.get_prefix('images')
@@ -304,13 +348,16 @@ class ConfigServer:
             for image, tags in images.items():
                 if image == '':
                     continue
+                if tags == '1':
+                    continue
                 for tag, image_info in tags.items():
                     if tag == '':
                         continue
                     raw_ref = f'{etcd_unquote(registry)}/{etcd_unquote(image)}:{tag}'
                     ref = ImageRef(raw_ref, known_registries)
                     coros.append(self._parse_image(ref, image_info, reverse_aliases))
-        return await asyncio.gather(*coros)
+        result = await asyncio.gather(*coros)
+        return result
 
     async def set_image_resource_limit(self, reference: str, slot_type: str,
                                        value_range: Tuple[Optional[Decimal], Optional[Decimal]]):
@@ -492,7 +539,7 @@ class ConfigServer:
         for kvlist in chunked(sorted(all_updates.items()), 16):
             await self.etcd.put_dict(dict(kvlist))
 
-    async def rescan_images(self, registry: str = None):
+    async def rescan_images(self, registry: str = None) -> None:
         if registry is None:
             registries = []
             data = await self.etcd.get_prefix('config/docker/registry')
@@ -512,13 +559,13 @@ class ConfigServer:
         await asyncio.gather(*coros)
         # TODO: delete images removed from registry?
 
-    async def alias(self, alias: str, target: str):
+    async def alias(self, alias: str, target: str) -> None:
         await self.etcd.put(f'images/_aliases/{etcd_quote(alias)}', target)
 
-    async def dealias(self, alias: str):
+    async def dealias(self, alias: str) -> None:
         await self.etcd.delete(f'images/_aliases/{etcd_quote(alias)}')
 
-    async def update_volumes_from_file(self, file: Path):
+    async def update_volumes_from_file(self, file: Path) -> None:
         log.info('Updating network volumes from "{0}"', file)
         try:
             data = yaml.load(open(file, 'r', encoding='utf-8'))
@@ -534,45 +581,59 @@ class ConfigServer:
             await self.etcd.put_dict(updates)
         log.info('done')
 
-    async def update_resource_slots(self, slot_key_and_units, *,
-                                    clear_existing: bool = True):
+    async def update_resource_slots(
+        self,
+        slot_key_and_units: Mapping[SlotName, SlotTypes],
+    ) -> None:
         updates = {}
-        if clear_existing:
-            await self.etcd.delete_prefix('config/resource_slots/')
+        known_slots = await self.get_resource_slots()
         for k, v in slot_key_and_units.items():
-            if k in ('cpu', 'mem'):
-                continue
-            # currently we support only two units
-            # (where count may be fractional)
-            assert v in ('bytes', 'count')
-            updates[f'config/resource_slots/{k}'] = v
-        await self.etcd.put_dict(updates)
+            if k not in known_slots or v != known_slots[k]:
+                updates[f'config/resource_slots/{k}'] = v.value
+        if updates:
+            await self.etcd.put_dict(updates)
 
-    async def update_manager_status(self, status):
+    async def update_manager_status(self, status) -> None:
         await self.etcd.put('manager/status', status.value)
         self.get_manager_status.cache_clear()
 
-    # TODO: refactor using contextvars in Python 3.7 so that the result is cached
-    #       in a per-request basis.
     @aiotools.lru_cache(maxsize=1, expire_after=2.0)
-    async def get_resource_slots(self):
+    async def _get_resource_slots(self):
+        raw_data = await self.etcd.get_prefix_dict('config/resource_slots')
+        return {
+            SlotName(k): SlotTypes(v) for k, v in raw_data.items()
+        }
+
+    async def get_resource_slots(self) -> Mapping[SlotName, SlotTypes]:
         '''
         Returns the system-wide known resource slots and their units.
         '''
-        intrinsic_slots = {'cpu': 'count', 'mem': 'bytes'}
-        configured_slots = await self.etcd.get_prefix_dict('config/resource_slots')
-        return {**intrinsic_slots, **configured_slots}
+        try:
+            ret = current_resource_slots.get()
+        except LookupError:
+            configured_slots = await self._get_resource_slots()
+            ret = {**INTRINSIC_SLOTS, **configured_slots}
+            current_resource_slots.set(ret)
+        return ret
 
-    @aiotools.lru_cache(maxsize=1, expire_after=60.0)
-    async def get_vfolder_types(self):
+    @aiotools.lru_cache(maxsize=1, expire_after=2.0)
+    async def _get_vfolder_types(self):
+        return await self.etcd.get_prefix_dict('volumes/_types')
+
+    async def get_vfolder_types(self) -> Sequence[str]:
         '''
         Returns the vfolder types currently set. One of "user" and/or "group".
         If none is specified, "user" type is implicitly assumed.
         '''
-        vf_types = await self.etcd.get_prefix_dict('volumes/_types')
-        if not vf_types:
-            vf_types = {'user': ''}
-        return list(vf_types.keys())
+        try:
+            ret = current_vfolder_types.get()
+        except LookupError:
+            vf_types = await self._get_vfolder_types()
+            if not vf_types:
+                vf_types = {'user': ''}
+            ret = list(vf_types.keys())
+            current_vfolder_types.set(ret)
+        return ret
 
     @aiotools.lru_cache(maxsize=1, expire_after=5.0)
     async def get_manager_nodes_info(self):
@@ -739,20 +800,17 @@ async def delete_config(request: web.Request, params: Any) -> web.Response:
     return web.json_response({'result': 'ok'})
 
 
-async def init(app: web.Application):
+async def app_ctx(app: web.Application) -> AsyncGenerator[None, None]:
     if app['pidx'] == 0:
-        await app['config_server'].register_myself(app['config'])
-
-
-async def shutdown(app: web.Application):
+        await app['config_server'].register_myself()
+    yield
     if app['pidx'] == 0:
         await app['config_server'].deregister_myself()
 
 
-def create_app(default_cors_options):
+def create_app(default_cors_options: CORSOptions) -> Tuple[web.Application, Iterable[WebMiddleware]]:
     app = web.Application()
-    app.on_startup.append(init)
-    app.on_shutdown.append(shutdown)
+    app.cleanup_ctx.append(app_ctx)
     app['prefix'] = 'config'
     app['api_versions'] = (3, 4)
     cors = aiohttp_cors.setup(app, defaults=default_cors_options)

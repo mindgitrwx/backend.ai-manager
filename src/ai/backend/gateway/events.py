@@ -4,11 +4,12 @@ import functools
 import logging
 from typing import (
     Any,
+    Iterable,
     Sequence, Tuple,
     MutableMapping,
     Set,
+    Protocol,
 )
-from typing_extensions import Protocol
 
 from aiohttp import web
 import aioredis
@@ -22,6 +23,7 @@ from ai.backend.common.types import (
     AgentId,
 )
 from .defs import REDIS_STREAM_DB
+from .typing import CORSOptions, WebMiddleware
 from .utils import current_loop
 
 log = BraceStyleAdapter(logging.getLogger('ai.backend.gateway.events'))
@@ -32,11 +34,11 @@ class EventCallback(Protocol):
                        context: Any,
                        agent_id: AgentId,
                        event_name: str,
-                       *args):
+                       *args) -> None:
         ...
 
 
-@attr.s(auto_attribs=True, slots=True, frozen=True, cmp=False)
+@attr.s(auto_attribs=True, slots=True, frozen=True, eq=False, order=False)
 class EventHandler:
     context: Any
     callback: EventCallback
@@ -146,7 +148,9 @@ class EventDispatcher(aobject):
         for consumer in self.consumers[event_name]:
             cb = consumer.callback
             try:
-                if asyncio.iscoroutine(cb) or asyncio.iscoroutinefunction(cb):
+                if asyncio.iscoroutine(cb):
+                    await scheduler.spawn(cb)
+                elif asyncio.iscoroutinefunction(cb):
                     await scheduler.spawn(cb(consumer.context, agent_id, event_name, *args))
                 else:
                     cb = functools.partial(cb, consumer.context, agent_id, event_name, *args)
@@ -166,7 +170,9 @@ class EventDispatcher(aobject):
         for subscriber in self.subscribers[event_name]:
             cb = subscriber.callback
             try:
-                if asyncio.iscoroutine(cb) or asyncio.iscoroutinefunction(cb):
+                if asyncio.iscoroutine(cb):
+                    await scheduler.spawn(cb)
+                elif asyncio.iscoroutinefunction(cb):
                     await scheduler.spawn(cb(subscriber.context, agent_id, event_name, *args))
                 else:
                     cb = functools.partial(cb, subscriber.context, agent_id, event_name, *args)
@@ -217,7 +223,7 @@ async def shutdown(app: web.Application) -> None:
     pass
 
 
-def create_app(default_cors_options):
+def create_app(default_cors_options: CORSOptions) -> Tuple[web.Application, Iterable[WebMiddleware]]:
     app = web.Application()
     app['api_versions'] = (3, 4)
     app.on_startup.append(init)

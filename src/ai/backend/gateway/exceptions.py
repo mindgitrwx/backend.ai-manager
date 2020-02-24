@@ -13,7 +13,7 @@ future UX improvements.
 import json
 from typing import (
     Optional, Union,
-    MutableMapping,
+    Mapping,
 )
 
 from aiohttp import web
@@ -25,9 +25,12 @@ class BackendError(web.HTTPError):
     aiohttp.web.HTTPError subclasses.
     '''
 
-    status_code = 500
-    error_type  = 'https://api.backend.ai/probs/general-error'
-    error_title = 'General Backend API Error.'
+    status_code: int = 500
+    error_type: str  = 'https://api.backend.ai/probs/general-error'
+    error_title: str = 'General Backend API Error.'
+
+    content_type: str
+    extra_msg: Optional[str]
 
     def __init__(self, extra_msg=None, extra_data=None, **kwargs):
         super().__init__(**kwargs)
@@ -65,6 +68,9 @@ class BackendError(web.HTTPError):
         if self.extra_data:
             lines.append(' -> extra_data: ' + repr(self.extra_data))
         return '\n'.join(lines)
+
+    def __reduce__(self):
+        return (type(self), (self.extra_msg, self.extra_data))
 
 
 class GenericNotFound(web.HTTPNotFound, BackendError):
@@ -147,9 +153,14 @@ class ScalingGroupNotFound(web.HTTPNotFound, BackendError):
     error_title = 'No such scaling group.'
 
 
-class KernelNotFound(web.HTTPNotFound, BackendError):
+class SessionNotFound(web.HTTPNotFound, BackendError):
     error_type  = 'https://api.backend.ai/probs/kernel-not-found'
-    error_title = 'No such kernel.'
+    error_title = 'No such session.'
+
+
+class TaskTemplateNotFound(web.HTTPNotFound, BackendError):
+    error_type  = 'https://api.backend.ai/probs/kernel-not-found'
+    error_title = 'No such task template.'
 
 
 class AppNotFound(web.HTTPNotFound, BackendError):
@@ -157,9 +168,9 @@ class AppNotFound(web.HTTPNotFound, BackendError):
     error_title = 'No such app service provided by the session.'
 
 
-class KernelAlreadyExists(web.HTTPBadRequest, BackendError):
+class SessionAlreadyExists(web.HTTPBadRequest, BackendError):
     error_type  = 'https://api.backend.ai/probs/kernel-already-exists'
-    error_title = 'The kernel already exists with ' \
+    error_title = 'The session already exists with ' \
                   'a different runtime type (language).'
 
 
@@ -216,9 +227,9 @@ class ServerFrozen(web.HTTPServiceUnavailable, BackendError):
 class AgentError(RuntimeError):
     '''
     A dummy exception class to distinguish agent-side errors passed via
-    aiozmq.rpc calls.
+    agent rpc calls.
 
-    It carrise two args tuple: the exception type and exception arguments from
+    It carries two args tuple: the exception type and exception arguments from
     the agent.
     '''
 
@@ -239,9 +250,9 @@ class BackendAgentError(BackendError):
     }
 
     def __init__(self, agent_error_type: str,
-                 exc_info: Union[str, AgentError, Exception, None] = None):
+                 exc_info: Union[str, AgentError, Exception, Mapping[str, Optional[str]], None] = None):
         super().__init__()
-        agent_details: MutableMapping[str, Optional[str]]
+        agent_details: Mapping[str, Optional[str]]
         if not agent_error_type.startswith('https://'):
             agent_error_type = self._short_type_map[agent_error_type.upper()]
         self.args = (
@@ -279,11 +290,14 @@ class BackendAgentError(BackendError):
                 'title': 'Unexpected exception ocurred.',
                 'exception': repr(exc_info),
             }
+        elif isinstance(exc_info, Mapping):
+            agent_details = exc_info
         else:
             agent_details = {
                 'type': agent_error_type,
                 'title': None if exc_info is None else str(exc_info),
             }
+        self.agent_details = agent_details
         self.agent_error_type = agent_error_type
         self.agent_error_title = agent_details['title']
         self.agent_exception = agent_details.get('exception', '')
@@ -294,10 +308,17 @@ class BackendAgentError(BackendError):
         }).encode()
 
     def __str__(self):
-        s = f'{self.status_code} {self.reason}'
         if self.agent_exception:
-            s += f'\n-> Agent-side error: {self.agent_exception}'
-        return s
+            return f'{self.agent_error_title} ({self.agent_exception})'
+        return f'{self.agent_error_title}'
+
+    def __repr__(self):
+        if self.agent_exception:
+            return f'<{type(self).__name__}: {self.agent_error_title} ({self.agent_exception})>'
+        return f'<{type(self).__name__}: {self.agent_error_title}>'
+
+    def __reduce__(self):
+        return (type(self), (self.agent_error_type, self.agent_details))
 
 
 class KernelCreationFailed(web.HTTPInternalServerError, BackendAgentError):
