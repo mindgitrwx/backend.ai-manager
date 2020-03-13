@@ -32,7 +32,7 @@ import trafaret as t
 import zmq, zmq.asyncio
 
 from ai.backend.common import validators as tx
-from ai.backend.common.logging import BraceStyleAdapter
+from ai.backend.common.logging import BraceStyleAdapter, pretty
 from ai.backend.common.types import (
     AgentId,
     KernelId,
@@ -439,33 +439,25 @@ async def get_stream_apps(request: web.Request) -> web.Response:
     session_name = request.match_info['session_name']
     access_key = request['keypair']['access_key']
     resp = []
-
-    async with request.app['dbpool'].acquire() as conn, conn.begin():
-        query = (
-            sa.select([
-                kernels.c.service_ports,
-            ])
-            .select_from(kernels)
-            .where(
-                (kernels.c.sess_id == session_name) &
-                (kernels.c.access_key == access_key)
-            )
-        )
-        result = await conn.execute(query)
-        row = await result.first()
-        for item in row['service_ports']:
-            response_dict = {
-                'name': item['name'],
-                'protocol': item['protocol'],
-                'ports': item['container_ports'],
-            }
-            if 'url_template' in item.keys():
-                response_dict['url_template'] = item['url_template']
-            if 'allowed_arguments' in item.keys():
-                response_dict['allowed_arguments'] = item['allowed_arguments']
-            if 'allowed_envs' in item.keys():
-                response_dict['allowed_envs'] = item['allowed_envs']
-            resp.append(response_dict)
+    log.info('STREAM_GET_APPS (ak:{}, s:{})', access_key, session_name)
+    compute_session = await asyncio.shield(
+        request.app['registry'].get_session(
+            session_name, access_key, field=[kernels.c.service_ports]
+        ))
+    print(f"{pretty(compute_session['service_ports'])!r}")
+    for item in compute_session['service_ports']:
+        response_dict = {
+            'name': item['name'],
+            'protocol': item['protocol'],
+            'ports': item['container_ports'],
+        }
+        if 'url_template' in item.keys():
+            response_dict['url_template'] = item['url_template']
+        if 'allowed_arguments' in item.keys():
+            response_dict['allowed_arguments'] = item['allowed_arguments']
+        if 'allowed_envs' in item.keys():
+            response_dict['allowed_envs'] = item['allowed_envs']
+        resp.append(response_dict)
 
     return web.json_response(resp)
 
