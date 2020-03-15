@@ -32,7 +32,7 @@ import trafaret as t
 import zmq, zmq.asyncio
 
 from ai.backend.common import validators as tx
-from ai.backend.common.logging import BraceStyleAdapter, pretty
+from ai.backend.common.logging import BraceStyleAdapter
 from ai.backend.common.types import (
     AgentId,
     KernelId,
@@ -444,7 +444,6 @@ async def get_stream_apps(request: web.Request) -> web.Response:
         request.app['registry'].get_session(
             session_name, access_key, field=[kernels.c.service_ports]
         ))
-    print(f"{pretty(compute_session['service_ports'])!r}")
     for item in compute_session['service_ports']:
         response_dict = {
             'name': item['name'],
