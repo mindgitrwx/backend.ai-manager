@@ -1,0 +1,1 @@
+Read manager ID from keys of etcd_info for 20.03 compatibility.
